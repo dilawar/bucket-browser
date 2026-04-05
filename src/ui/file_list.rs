@@ -79,28 +79,29 @@ pub fn show(
         upload_item(ui, transfer_busy, &upload);
     });
 
-    // ── Layout: upload button pinned to bottom ────────────────────────────────
+    // ── Layout: upload link pinned to bottom ─────────────────────────────────
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-        // Upload button
-        ui.add_space(8.0);
+        ui.add_space(6.0);
         let color = if transfer_busy {
-            Color32::from_rgb(55, 80, 130)
+            Color32::from_gray(160)
         } else {
             Color32::from_rgb(37, 99, 235)
         };
-        if ui
-            .add_sized(
-                [ui.available_width(), 32.0],
-                Button::new(RichText::new("+ Upload file").strong().size(15.0).color(Color32::WHITE))
-                    .fill(color)
-                    .corner_radius(6.0),
+        let resp = ui.add(
+            Label::new(
+                RichText::new("+ Upload file")
+                    .color(color)
+                    .size(14.0)
+                    .underline(),
             )
-            .on_hover_text("Upload a file to the current location")
-            .clicked()
-            && !transfer_busy
-        {
+            .sense(Sense::click()),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Upload a file to the current location");
+        if resp.clicked() && !transfer_busy {
             upload.set(true);
         }
+        ui.add_space(4.0);
         ui.separator();
 
         // Main content (top-down)
