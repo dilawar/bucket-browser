@@ -80,7 +80,7 @@ pub fn show(
     });
 
     // ── Layout: upload link pinned to bottom ─────────────────────────────────
-    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
         ui.add_space(6.0);
         let color = if transfer_busy {
             Color32::from_gray(160)
