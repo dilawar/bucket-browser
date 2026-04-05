@@ -26,22 +26,21 @@ impl Default for StoragePath {
 
 /// Join an S3 prefix with a child name, returning a normalised key segment.
 ///
-/// Uses [`object_store::path::Path`] so that extra or missing `/` separators,
-/// double slashes, and leading slashes are all handled consistently — the same
-/// normalisation applied when actually talking to the S3 API.
+/// Uses plain string operations rather than `object_store::path::Path::child()`
+/// because `child()` treats the argument as a single segment and percent-encodes
+/// any `/` characters, which causes double-encoding when the resulting string is
+/// later passed back to `Path::from()` (e.g. multi-segment names produced by
+/// folder uploads: `"photos/sub/file.jpg"`).
 ///
 /// The caller is responsible for appending a trailing `/` when the result
 /// should represent a directory.
 fn s3_join(prefix: &str, name: &str) -> String {
-    use object_store::path::Path as OsPath;
-    // Strip trailing slash before handing to OsPath (it would otherwise be
-    // interpreted as an empty final segment on some versions).
-    let clean = prefix.trim_end_matches('/');
-    if clean.is_empty() {
-        // Bucket root — just normalise the name itself.
-        OsPath::from(name).to_string()
+    let prefix = prefix.trim_end_matches('/');
+    let name = name.trim_start_matches('/');
+    if prefix.is_empty() {
+        name.to_owned()
     } else {
-        OsPath::from(clean).child(name).to_string()
+        format!("{prefix}/{name}")
     }
 }
 

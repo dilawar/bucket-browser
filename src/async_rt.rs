@@ -46,6 +46,8 @@ pub fn spawn_listing(
 
 pub struct TransferHandle {
     slot: Arc<Mutex<Option<Result<String>>>>,
+    /// Current file/operation being processed; empty when not applicable.
+    progress: Arc<Mutex<String>>,
     join: tokio::task::JoinHandle<()>,
 }
 
@@ -64,6 +66,11 @@ impl TransferHandle {
         !self.join.is_finished() && self.slot.lock().unwrap().is_none()
     }
 
+    /// Current filename/operation being processed, or empty string if unknown.
+    pub fn progress_msg(&self) -> String {
+        self.progress.lock().unwrap().clone()
+    }
+
     /// Abort the underlying task immediately.
     pub fn cancel(&self) {
         self.join.abort();
@@ -78,10 +85,14 @@ pub fn spawn_upload(
     ctx: egui::Context,
     rt: &tokio::runtime::Handle,
 ) -> TransferHandle {
-    spawn_transfer(rt, ctx, move || do_upload(backend, current_path))
+    spawn_transfer_uploading(rt, ctx, move |p| do_upload(backend, current_path, p))
 }
 
-async fn do_upload(backend: Arc<dyn Backend>, current_path: StoragePath) -> Result<String> {
+async fn do_upload(
+    backend: Arc<dyn Backend>,
+    current_path: StoragePath,
+    progress: Arc<Mutex<String>>,
+) -> Result<String> {
     let local_path = tokio::task::spawn_blocking(|| rfd::FileDialog::new().pick_file()).await?;
     let Some(local_path) = local_path else {
         return Ok("Upload cancelled.".to_owned());
@@ -90,6 +101,7 @@ async fn do_upload(backend: Arc<dyn Backend>, current_path: StoragePath) -> Resu
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "upload".to_owned());
+    *progress.lock().unwrap() = file_name.clone();
     let dest = current_path.child_file(&file_name);
     let data = bytes::Bytes::from(tokio::fs::read(&local_path).await?);
     let size = data.len();
@@ -105,12 +117,13 @@ pub fn spawn_upload_folder(
     ctx: egui::Context,
     rt: &tokio::runtime::Handle,
 ) -> TransferHandle {
-    spawn_transfer(rt, ctx, move || do_upload_folder(backend, current_path))
+    spawn_transfer_uploading(rt, ctx, move |p| do_upload_folder(backend, current_path, p))
 }
 
 async fn do_upload_folder(
     backend: Arc<dyn Backend>,
     current_path: StoragePath,
+    progress: Arc<Mutex<String>>,
 ) -> Result<String> {
     // Pick folder on the blocking thread (rfd is sync).
     let local_folder =
@@ -138,6 +151,7 @@ async fn do_upload_folder(
     let total = file_list.len();
     let mut errors = 0usize;
     for (local_path, rel_key) in &file_list {
+        *progress.lock().unwrap() = rel_key.clone();
         let dest = current_path.child_file(rel_key);
         match tokio::fs::read(local_path).await {
             Ok(data) => {
@@ -229,6 +243,7 @@ pub fn spawn_presign(
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
+/// Spawn a transfer task with no progress reporting (delete, download, presign).
 pub(crate) fn spawn_transfer<F, Fut>(
     rt: &tokio::runtime::Handle,
     ctx: egui::Context,
@@ -240,12 +255,35 @@ where
 {
     let slot: Arc<Mutex<Option<Result<String>>>> = Arc::new(Mutex::new(None));
     let slot2 = Arc::clone(&slot);
+    let progress = Arc::new(Mutex::new(String::new()));
     let join = rt.spawn(async move {
         let result = f().await;
         *slot2.lock().unwrap() = Some(result);
         ctx.request_repaint();
     });
-    TransferHandle { slot, join }
+    TransferHandle { slot, progress, join }
+}
+
+/// Spawn a transfer task that receives a progress Arc to report current filename.
+pub(crate) fn spawn_transfer_uploading<F, Fut>(
+    rt: &tokio::runtime::Handle,
+    ctx: egui::Context,
+    f: F,
+) -> TransferHandle
+where
+    F: FnOnce(Arc<Mutex<String>>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<String>> + Send + 'static,
+{
+    let slot: Arc<Mutex<Option<Result<String>>>> = Arc::new(Mutex::new(None));
+    let slot2 = Arc::clone(&slot);
+    let progress: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let progress2 = Arc::clone(&progress);
+    let join = rt.spawn(async move {
+        let result = f(progress2).await;
+        *slot2.lock().unwrap() = Some(result);
+        ctx.request_repaint();
+    });
+    TransferHandle { slot, progress, join }
 }
 
 /// Extract the last path segment (filename) from an S3 key or local path string.

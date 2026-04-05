@@ -543,9 +543,25 @@ impl S3Explorer {
                 if busy {
                     ui.separator();
                     ui.spinner();
-                    ui.label(RichText::new("Transferring…").size(13.0).color(muted));
+                    let progress = self
+                        .transfer
+                        .as_ref()
+                        .map(|h| h.progress_msg())
+                        .filter(|s| !s.is_empty());
+                    let label = match &progress {
+                        Some(name) => format!("Uploading  {name}"),
+                        None => "Transferring…".to_owned(),
+                    };
+                    ui.label(RichText::new(label).size(13.0).color(muted));
                     if ui
-                        .button(RichText::new("✕ Cancel").size(13.0))
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Cancel upload")
+                                    .size(13.0)
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(180, 40, 40)),
+                        )
                         .on_hover_text("Abort the current upload")
                         .clicked()
                     {
