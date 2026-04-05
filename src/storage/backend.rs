@@ -15,6 +15,10 @@ pub trait Backend: Send + Sync + 'static {
     /// Upload `data` to `path`, creating or replacing the object.
     async fn put(&self, path: &StoragePath, data: Bytes) -> Result<()>;
 
-    /// Short human-readable name shown in the status bar (e.g. `"Local"`, `"S3: my-bucket"`).
+    /// Delete the object at `path`, or (for directory paths ending with `/`)
+    /// recursively delete every object under that prefix.
+    async fn delete(&self, path: &StoragePath) -> Result<()>;
+
+    /// Short human-readable name shown in the status bar.
     fn name(&self) -> &str;
 }

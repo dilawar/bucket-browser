@@ -9,6 +9,7 @@ pub struct ToolbarResponse {
     pub go_forward: bool,
     pub go_up: bool,
     pub refresh: bool,
+    pub toggle_theme: bool,
 }
 
 pub fn show(
@@ -17,6 +18,7 @@ pub fn show(
     can_back: bool,
     can_forward: bool,
     can_up: bool,
+    dark_mode: bool,
 ) -> ToolbarResponse {
     let mut resp = ToolbarResponse::default();
 
@@ -37,6 +39,14 @@ pub fn show(
         if path_response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
             resp.navigate_to = Some(StoragePath::parse(path_input));
         }
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let icon = if dark_mode { "☀" } else { "🌙" };
+            let tooltip = if dark_mode { "Switch to light theme" } else { "Switch to dark theme" };
+            if ui.button(icon).on_hover_text(tooltip).clicked() {
+                resp.toggle_theme = true;
+            }
+        });
     });
 
     resp

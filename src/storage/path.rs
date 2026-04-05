@@ -24,6 +24,27 @@ impl Default for StoragePath {
     }
 }
 
+/// Join an S3 prefix with a child name, returning a normalised key segment.
+///
+/// Uses [`object_store::path::Path`] so that extra or missing `/` separators,
+/// double slashes, and leading slashes are all handled consistently — the same
+/// normalisation applied when actually talking to the S3 API.
+///
+/// The caller is responsible for appending a trailing `/` when the result
+/// should represent a directory.
+fn s3_join(prefix: &str, name: &str) -> String {
+    use object_store::path::Path as OsPath;
+    // Strip trailing slash before handing to OsPath (it would otherwise be
+    // interpreted as an empty final segment on some versions).
+    let clean = prefix.trim_end_matches('/');
+    if clean.is_empty() {
+        // Bucket root — just normalise the name itself.
+        OsPath::from(name).to_string()
+    } else {
+        OsPath::from(clean).child(name).to_string()
+    }
+}
+
 impl StoragePath {
     /// Construct an S3 path from a bucket and a prefix.
     pub fn s3(bucket: impl Into<String>, prefix: impl Into<String>) -> Self {
@@ -74,7 +95,9 @@ impl StoragePath {
     pub fn child(&self, name: &str) -> Self {
         match self {
             Self::Local(p) => Self::Local(p.join(name)),
-            Self::S3 { bucket, prefix } => Self::s3(bucket, format!("{prefix}{name}/")),
+            Self::S3 { bucket, prefix } => {
+                Self::s3(bucket, format!("{}/", s3_join(prefix, name)))
+            }
         }
     }
 
@@ -82,7 +105,7 @@ impl StoragePath {
     pub fn child_file(&self, name: &str) -> Self {
         match self {
             Self::Local(p) => Self::Local(p.join(name)),
-            Self::S3 { bucket, prefix } => Self::s3(bucket, format!("{prefix}{name}")),
+            Self::S3 { bucket, prefix } => Self::s3(bucket, s3_join(prefix, name)),
         }
     }
 
@@ -272,6 +295,40 @@ mod tests {
         assert_eq!(
             StoragePath::s3("bucket", "a/").child("b"),
             StoragePath::s3("bucket", "a/b/"),
+        );
+    }
+
+    #[test]
+    fn child_inserts_separator_when_prefix_missing_slash() {
+        // Prefix without trailing `/` (e.g. typed manually in the address bar).
+        assert_eq!(
+            StoragePath::s3("bucket", "foo").child("bar"),
+            StoragePath::s3("bucket", "foo/bar/"),
+        );
+    }
+
+    #[test]
+    fn child_file_normal() {
+        assert_eq!(
+            StoragePath::s3("bucket", "foo/").child_file("bar.png"),
+            StoragePath::s3("bucket", "foo/bar.png"),
+        );
+    }
+
+    #[test]
+    fn child_file_inserts_separator_when_prefix_missing_slash() {
+        // This was the reported bug: "foo" + "bar.png" → "foobar.png" instead of "foo/bar.png".
+        assert_eq!(
+            StoragePath::s3("bucket", "foo").child_file("bar.png"),
+            StoragePath::s3("bucket", "foo/bar.png"),
+        );
+    }
+
+    #[test]
+    fn child_file_from_root() {
+        assert_eq!(
+            StoragePath::s3_root("bucket").child_file("file.txt"),
+            StoragePath::s3("bucket", "file.txt"),
         );
     }
 

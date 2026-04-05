@@ -6,14 +6,12 @@ use crate::storage::{Backend, StorageEntry, StoragePath};
 
 // ── ListingHandle ─────────────────────────────────────────────────────────────
 
-/// Holds the pending or completed result of a single listing request.
 pub struct ListingHandle {
     slot: Arc<Mutex<Option<Result<Vec<StorageEntry>>>>>,
     join: tokio::task::JoinHandle<()>,
 }
 
 impl ListingHandle {
-    /// Non-blocking drain. Returns `None` while running, `Some(result)` when done.
     pub fn try_recv(&self) -> Option<Result<Vec<StorageEntry>>> {
         if let Some(result) = self.slot.lock().unwrap().take() {
             return Some(result);
@@ -27,7 +25,6 @@ impl ListingHandle {
     }
 }
 
-/// Spawn a background listing task.
 pub fn spawn_listing(
     backend: Arc<dyn Backend>,
     path: StoragePath,
@@ -36,26 +33,22 @@ pub fn spawn_listing(
 ) -> ListingHandle {
     let slot: Arc<Mutex<Option<Result<Vec<StorageEntry>>>>> = Arc::new(Mutex::new(None));
     let slot2 = Arc::clone(&slot);
-
     let join = rt.spawn(async move {
         let result = backend.list(&path).await;
         *slot2.lock().unwrap() = Some(result);
         ctx.request_repaint();
     });
-
     ListingHandle { slot, join }
 }
 
 // ── TransferHandle ────────────────────────────────────────────────────────────
 
-/// Tracks an in-progress upload or download. Result is a human-readable status string.
 pub struct TransferHandle {
     slot: Arc<Mutex<Option<Result<String>>>>,
     join: tokio::task::JoinHandle<()>,
 }
 
 impl TransferHandle {
-    /// Returns `None` while running, `Some(result)` when done.
     pub fn try_recv(&self) -> Option<Result<String>> {
         if let Some(result) = self.slot.lock().unwrap().take() {
             return Some(result);
@@ -71,86 +64,130 @@ impl TransferHandle {
     }
 }
 
-/// Spawn a download: fetches `path` from the backend, shows a native save dialog,
-/// then writes the bytes to the chosen location.
+// ── Download ──────────────────────────────────────────────────────────────────
+
+/// Spawn a download task.
+/// - Single path → native save-file dialog.
+/// - Multiple paths → native pick-folder dialog; each file is saved there by name.
 pub fn spawn_download(
     backend: Arc<dyn Backend>,
-    path: StoragePath,
+    paths: Vec<StoragePath>,
     ctx: egui::Context,
     rt: &tokio::runtime::Handle,
 ) -> TransferHandle {
-    let slot: Arc<Mutex<Option<Result<String>>>> = Arc::new(Mutex::new(None));
-    let slot2 = Arc::clone(&slot);
-
-    let join = rt.spawn(async move {
-        let result = do_download(backend, path).await;
-        *slot2.lock().unwrap() = Some(result);
-        ctx.request_repaint();
-    });
-
-    TransferHandle { slot, join }
+    spawn_transfer(rt, ctx, move || do_download(backend, paths))
 }
 
-async fn do_download(backend: Arc<dyn Backend>, path: StoragePath) -> Result<String> {
-    let file_name = path
-        .to_string()
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or("download")
-        .to_owned();
-
-    // Open save dialog on the blocking thread pool (rfd is sync).
-    let save_path = tokio::task::spawn_blocking(move || {
-        rfd::FileDialog::new().set_file_name(&file_name).save_file()
-    })
-    .await?;
-
-    let Some(save_path) = save_path else {
-        return Ok("Download cancelled.".to_owned());
-    };
-
-    let data = backend.get(&path).await?;
-    tokio::fs::write(&save_path, &data).await?;
-    Ok(format!("Saved to {}", save_path.display()))
+async fn do_download(backend: Arc<dyn Backend>, paths: Vec<StoragePath>) -> Result<String> {
+    if paths.len() == 1 {
+        let path = paths.into_iter().next().unwrap();
+        let file_name = base_name(&path.to_string());
+        let save_path = tokio::task::spawn_blocking(move || {
+            rfd::FileDialog::new().set_file_name(&file_name).save_file()
+        })
+        .await?;  // unwrap JoinError only; result is Option<PathBuf>
+        let Some(save_path) = save_path else {
+            return Ok("Download cancelled.".to_owned());
+        };
+        let data = backend.get(&path).await?;
+        tokio::fs::write(&save_path, &data).await?;
+        Ok(format!("Saved to {}", save_path.display()))
+    } else {
+        let folder = tokio::task::spawn_blocking(|| {
+            rfd::FileDialog::new()
+                .set_title("Choose download folder")
+                .pick_folder()
+        })
+        .await?;
+        let Some(folder) = folder else {
+            return Ok("Download cancelled.".to_owned());
+        };
+        let mut saved = 0usize;
+        for path in &paths {
+            let name = base_name(&path.to_string());
+            if name.is_empty() { continue; }
+            let data = backend.get(path).await?;
+            tokio::fs::write(folder.join(&name), &data).await?;
+            saved += 1;
+        }
+        Ok(format!(
+            "Downloaded {saved} file{} to {}",
+            if saved == 1 { "" } else { "s" },
+            folder.display()
+        ))
+    }
 }
 
-/// Spawn an upload: shows a native file picker, reads the chosen file, and
-/// puts it under `current_path` in the backend.
+// ── Upload ────────────────────────────────────────────────────────────────────
+
 pub fn spawn_upload(
     backend: Arc<dyn Backend>,
     current_path: StoragePath,
     ctx: egui::Context,
     rt: &tokio::runtime::Handle,
 ) -> TransferHandle {
-    let slot: Arc<Mutex<Option<Result<String>>>> = Arc::new(Mutex::new(None));
-    let slot2 = Arc::clone(&slot);
-
-    let join = rt.spawn(async move {
-        let result = do_upload(backend, current_path).await;
-        *slot2.lock().unwrap() = Some(result);
-        ctx.request_repaint();
-    });
-
-    TransferHandle { slot, join }
+    spawn_transfer(rt, ctx, move || do_upload(backend, current_path))
 }
 
 async fn do_upload(backend: Arc<dyn Backend>, current_path: StoragePath) -> Result<String> {
-    // Open file picker on the blocking thread pool.
     let local_path = tokio::task::spawn_blocking(|| rfd::FileDialog::new().pick_file()).await?;
-
     let Some(local_path) = local_path else {
         return Ok("Upload cancelled.".to_owned());
     };
-
     let file_name = local_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "upload".to_owned());
-
     let dest = current_path.child_file(&file_name);
     let data = bytes::Bytes::from(tokio::fs::read(&local_path).await?);
     let size = data.len();
     backend.put(&dest, data).await?;
     Ok(format!("Uploaded {file_name} ({size} bytes) → {dest}"))
+}
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+
+/// Spawn a delete task that removes every path in `paths` sequentially.
+/// Directories (S3 prefixes ending with `/`) are deleted recursively.
+pub fn spawn_delete(
+    backend: Arc<dyn Backend>,
+    paths: Vec<StoragePath>,
+    ctx: egui::Context,
+    rt: &tokio::runtime::Handle,
+) -> TransferHandle {
+    spawn_transfer(rt, ctx, move || do_delete(backend, paths))
+}
+
+async fn do_delete(backend: Arc<dyn Backend>, paths: Vec<StoragePath>) -> Result<String> {
+    let n = paths.len();
+    for path in &paths {
+        backend.delete(path).await?;
+    }
+    Ok(format!("Deleted {n} item{}", if n == 1 { "" } else { "s" }))
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+fn spawn_transfer<F, Fut>(
+    rt: &tokio::runtime::Handle,
+    ctx: egui::Context,
+    f: F,
+) -> TransferHandle
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<String>> + Send + 'static,
+{
+    let slot: Arc<Mutex<Option<Result<String>>>> = Arc::new(Mutex::new(None));
+    let slot2 = Arc::clone(&slot);
+    let join = rt.spawn(async move {
+        let result = f().await;
+        *slot2.lock().unwrap() = Some(result);
+        ctx.request_repaint();
+    });
+    TransferHandle { slot, join }
+}
+
+/// Extract the last path segment (filename) from an S3 key or local path string.
+fn base_name(s: &str) -> String {
+    s.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_owned()
 }

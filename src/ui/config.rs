@@ -158,8 +158,14 @@ pub struct ConfigResponse {
 pub fn show(ui: &mut Ui, f: &mut ConfigFields, error: Option<&str>) -> ConfigResponse {
     let mut connect = false;
 
+    // Push the form down so it appears vertically centred.
+    // 370 px is a reasonable estimate of the form's rendered height.
+    let v_pad = ((ui.available_height() - 370.0) / 2.0).max(16.0);
+    ui.add_space(v_pad);
+
     ui.vertical_centered(|ui| {
-        ui.add_space(24.0);
+        ui.set_max_width(560.0);
+        ui.add_space(4.0);
         ui.heading("Connect to S3-compatible storage");
         ui.add_space(4.0);
         ui.label(
@@ -262,10 +268,21 @@ pub fn show(ui: &mut Ui, f: &mut ConfigFields, error: Option<&str>) -> ConfigRes
             && !f.secret_key.is_empty();
 
         ui.with_layout(Layout::top_down(Align::Center), |ui| {
-            if ui
-                .add_enabled(ready, egui::Button::new(RichText::new("Connect").strong()))
-                .clicked()
-            {
+            let btn = egui::Button::new(
+                RichText::new("  Connect  ")
+                    .strong()
+                    .size(16.0)
+                    .color(Color32::WHITE),
+            )
+            .fill(if ready {
+                Color32::from_rgb(37, 99, 235)
+            } else {
+                Color32::from_rgb(100, 120, 160)
+            })
+            .corner_radius(6.0)
+            .min_size(egui::vec2(160.0, 38.0));
+
+            if ui.add_enabled(ready, btn).clicked() {
                 connect = true;
             }
         });

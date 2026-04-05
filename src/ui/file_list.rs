@@ -1,29 +1,31 @@
 use std::cell::Cell;
+use std::collections::HashSet;
 
 use egui::{Button, Color32, Label, RichText, Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 
-use crate::storage::{EntryKind, StorageEntry, StoragePath, human_size};
+use crate::storage::{human_size, EntryKind, StorageEntry, StoragePath};
 
 #[derive(Default)]
 pub struct FileListResponse {
     pub open_dir: Option<StoragePath>,
-    pub download: Option<StoragePath>,
+    /// Files/dirs to download (single or batch).
+    pub download: Vec<StoragePath>,
+    /// Files/dirs to delete (single or batch).
+    pub delete: Vec<StoragePath>,
     pub upload: bool,
+    // Selection mutations — applied by app.rs after show() returns.
+    pub sel_add: Option<StoragePath>,
+    pub sel_remove: Option<StoragePath>,
+    pub sel_clear: bool,
 }
 
-// Fixed-column widths (icon + size + modified + copy) plus table borders/gaps.
-const FIXED_WIDTH: f32 = 28.0 + 80.0 + 130.0 + 28.0 + 48.0;
+const FIXED_WIDTH: f32 = 24.0 + 28.0 + 80.0 + 130.0 + 28.0 + 48.0; // checkbox+icon+size+modified+copy
 const LINE_HEIGHT: f32 = 18.0;
-// Vertical padding added above and below the text within each row.
 const ROW_V_PAD: f32 = 6.0;
 const ROW_PADDING: f32 = ROW_V_PAD * 2.0;
-// Estimated average character width for the default egui proportional font.
 const CHAR_WIDTH: f32 = 7.5;
-// Approximate rendered width of the "⬆ Upload" button.
-const UPLOAD_BTN_W: f32 = 88.0;
 
-/// Compute the row height needed so the name column doesn't clip when it wraps.
 fn row_height(name: &str, name_col_width: f32) -> f32 {
     let lines = ((name.len() as f32 * CHAR_WIDTH) / name_col_width)
         .ceil()
@@ -31,17 +33,16 @@ fn row_height(name: &str, name_col_width: f32) -> f32 {
     LINE_HEIGHT * lines + ROW_PADDING
 }
 
-/// Return an emoji icon for a file based on its mime type (guessed from extension).
 fn file_icon(name: &str) -> &'static str {
     let mime = mime_guess::from_path(name).first_or_octet_stream();
     match mime.type_().as_str() {
         "image" => "🖼",
         "audio" => "🎵",
         "video" => "🎬",
-        "text" => "📝",
+        "text"  => "📝",
         _ => match mime.subtype().as_str() {
-            "zip" | "gzip" | "x-tar" | "x-bzip2" | "x-xz" | "x-7z-compressed"
-            | "x-rar-compressed" => "📦",
+            "zip" | "gzip" | "x-tar" | "x-bzip2" | "x-xz"
+            | "x-7z-compressed" | "x-rar-compressed" => "📦",
             "pdf" => "📕",
             _ => "📄",
         },
@@ -52,190 +53,294 @@ pub fn show(
     ui: &mut Ui,
     entries: &[StorageEntry],
     filter: &mut String,
+    selection: &HashSet<StoragePath>,
     loading: bool,
     error: Option<&str>,
     transfer_busy: bool,
 ) -> FileListResponse {
-    // Use Cell so multiple closures (top-bar button, bg context menu, row context menus)
-    // can all set this flag without conflicting borrows.
-    let upload = Cell::new(false);
+    // ── All output state ──────────────────────────────────────────────────────
+    let upload     = Cell::new(false);
+    let open_dir:  Cell<Option<StoragePath>>  = Cell::new(None);
+    let download:  Cell<Vec<StoragePath>>     = Cell::new(Vec::new());
+    let delete:    Cell<Vec<StoragePath>>     = Cell::new(Vec::new());
+    let sel_add:   Cell<Option<StoragePath>>  = Cell::new(None);
+    let sel_remove:Cell<Option<StoragePath>>  = Cell::new(None);
+    let sel_clear  = Cell::new(false);
 
-    // ── Background interaction (registered first so table rows take priority) ──
-    // Covers the whole panel for right-click context menus on empty space.
-    let panel_rect = ui.max_rect();
-    let bg_resp = ui.interact(panel_rect, ui.id().with("bg_ctx"), Sense::click());
+    // ── Background right-click ────────────────────────────────────────────────
+    let bg_resp = ui.interact(ui.max_rect(), ui.id().with("bg_ctx"), Sense::click());
     bg_resp.context_menu(|ui| {
-        if ui
-            .add_enabled(!transfer_busy, Button::new("⬆ Upload"))
-            .on_hover_text("Upload a file to the current location")
-            .clicked()
-        {
-            upload.set(true);
-            ui.close_menu();
-        }
+        upload_item(ui, transfer_busy, &upload);
     });
 
-    // ── Top bar: filter field + upload button ─────────────────────────────────
-    ui.horizontal(|ui| {
-        ui.label("🔍");
-        // Reserve exact width for the button so it is always visible.
-        let spacing = ui.spacing().item_spacing.x;
-        let text_w = (ui.available_width() - UPLOAD_BTN_W - spacing).max(40.0);
-        ui.add_sized(
-            [text_w, ui.spacing().interact_size.y],
-            egui::TextEdit::singleline(filter).hint_text("Filter…"),
-        );
+    // ── Layout: upload button pinned to bottom ────────────────────────────────
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+        // Upload button
+        ui.add_space(8.0);
+        let color = if transfer_busy {
+            Color32::from_rgb(55, 80, 130)
+        } else {
+            Color32::from_rgb(37, 99, 235)
+        };
         if ui
-            .add_enabled(!transfer_busy, Button::new("⬆ Upload"))
+            .add_sized(
+                [ui.available_width(), 32.0],
+                Button::new(RichText::new("＋  Upload file").strong().color(Color32::WHITE))
+                    .fill(color)
+                    .corner_radius(6.0),
+            )
             .on_hover_text("Upload a file to the current location")
             .clicked()
+            && !transfer_busy
         {
             upload.set(true);
         }
-    });
-    ui.separator();
+        ui.separator();
 
-    if loading {
-        ui.centered_and_justified(|ui| {
-            ui.spinner();
-        });
-        return FileListResponse {
-            upload: upload.get(),
-            ..Default::default()
-        };
-    }
-
-    if let Some(msg) = error {
-        ui.colored_label(Color32::RED, msg);
-        return FileListResponse {
-            upload: upload.get(),
-            ..Default::default()
-        };
-    }
-
-    let filter_lc = filter.to_lowercase();
-    let visible: Vec<&StorageEntry> = entries
-        .iter()
-        .filter(|e| filter_lc.is_empty() || e.name.to_lowercase().contains(&filter_lc))
-        .collect();
-
-    // Name column width: total panel width minus the fixed columns.
-    let name_col_width = (ui.available_width() - FIXED_WIDTH).max(80.0);
-
-    let open_dir: Cell<Option<StoragePath>> = Cell::new(None);
-    let download: Cell<Option<StoragePath>> = Cell::new(None);
-
-    TableBuilder::new(ui)
-        .striped(true)
-        .resizable(true)
-        .auto_shrink(false)
-        .column(Column::exact(28.0)) // icon
-        .column(Column::remainder().clip(false)) // name (wraps)
-        .column(Column::initial(80.0).resizable(true)) // size
-        .column(Column::initial(130.0).resizable(true)) // modified
-        .column(Column::exact(28.0)) // copy
-        .header(20.0, |mut h| {
-            h.col(|_| {});
-            h.col(|ui| {
-                ui.label(RichText::new("Name").strong());
+        // Main content (top-down)
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+            // Filter bar
+            ui.horizontal(|ui| {
+                ui.label("🔍");
+                ui.add(
+                    egui::TextEdit::singleline(filter)
+                        .hint_text("Filter…")
+                        .desired_width(f32::INFINITY),
+                );
             });
-            h.col(|ui| {
-                ui.label(RichText::new("Size").strong());
-            });
-            h.col(|ui| {
-                ui.label(RichText::new("Modified").strong());
-            });
-            h.col(|_| {});
-        })
-        .body(|body| {
-            let heights = visible.iter().map(|e| row_height(&e.name, name_col_width));
-            body.heterogeneous_rows(heights, |mut row| {
-                let entry = visible[row.index()];
 
-                // ── icon ─────────────────────────────────────────────────────
-                row.col(|ui| {
-                    ui.add_space(ROW_V_PAD);
-                    let icon = match &entry.kind {
-                        EntryKind::Directory => "📁",
-                        EntryKind::File => file_icon(&entry.name),
-                    };
-                    ui.label(icon);
-                });
-
-                // ── name ─────────────────────────────────────────────────────
-                row.col(|ui| {
-                    ui.add_space(ROW_V_PAD);
-                    let resp = ui
-                        .add(
-                            Label::new(match entry.kind {
-                                EntryKind::Directory => RichText::new(&entry.name)
-                                    .color(Color32::from_rgb(100, 180, 255)),
-                                EntryKind::File => RichText::new(&entry.name),
-                            })
-                            .wrap()
-                            .sense(Sense::click()),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text(entry.path.to_string());
-
-                    if resp.clicked() {
-                        match entry.kind {
-                            EntryKind::Directory => open_dir.set(Some(entry.path.clone())),
-                            EntryKind::File => download.set(Some(entry.path.clone())),
-                        }
-                    }
-
-                    // Right-click on any row also shows the upload option.
-                    resp.context_menu(|ui| {
-                        if ui
-                            .add_enabled(!transfer_busy, Button::new("⬆ Upload"))
-                            .on_hover_text("Upload a file to the current location")
+            // Selection action bar
+            if !selection.is_empty() {
+                ui.separator();
+                let n = selection.len();
+                let n_files = selection
+                    .iter()
+                    .filter(|p| {
+                        entries.iter().any(|e| &e.path == *p && e.kind == EntryKind::File)
+                    })
+                    .count();
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("{n} selected"))
+                            .strong()
+                            .color(Color32::from_rgb(100, 180, 255)),
+                    );
+                    ui.add_space(4.0);
+                    if n_files > 0
+                        && ui
+                            .add_enabled(
+                                !transfer_busy,
+                                Button::new(format!("⬇ Download ({n_files})")),
+                            )
+                            .on_hover_text("Download selected files")
                             .clicked()
-                        {
-                            upload.set(true);
-                            ui.close_menu();
-                        }
-                    });
-                });
-
-                // ── size ─────────────────────────────────────────────────────
-                row.col(|ui| {
-                    ui.add_space(ROW_V_PAD);
-                    if let Some(size) = entry.size {
-                        ui.label(RichText::new(human_size(size)).color(Color32::GRAY).small());
+                    {
+                        let paths: Vec<_> = selection
+                            .iter()
+                            .filter(|p| {
+                                entries.iter().any(|e| &e.path == *p && e.kind == EntryKind::File)
+                            })
+                            .cloned()
+                            .collect();
+                        download.set(paths);
                     }
-                });
-
-                // ── modified ─────────────────────────────────────────────────
-                row.col(|ui| {
-                    ui.add_space(ROW_V_PAD);
-                    if let Some(ts) = entry.last_modified {
-                        ui.label(
-                            RichText::new(ts.format("%Y-%m-%d %H:%M").to_string())
-                                .color(Color32::GRAY)
-                                .small(),
-                        );
-                    }
-                });
-
-                // ── copy path ────────────────────────────────────────────────
-                row.col(|ui| {
-                    ui.add_space(ROW_V_PAD);
-                    let path_str = entry.path.to_string();
                     if ui
-                        .button("⎘")
-                        .on_hover_text(format!("Copy: {path_str}"))
+                        .add_enabled(
+                            !transfer_busy,
+                            Button::new(format!("🗑 Delete ({n})"))
+                                .fill(Color32::from_rgb(180, 40, 40)),
+                        )
+                        .on_hover_text("Delete all selected items")
                         .clicked()
                     {
-                        ui.ctx().copy_text(path_str);
+                        delete.set(selection.iter().cloned().collect());
+                    }
+                    if ui.button("✕ Clear").on_hover_text("Clear selection").clicked() {
+                        sel_clear.set(true);
                     }
                 });
-            });
+            }
+
+            ui.separator();
+
+            if loading {
+                ui.centered_and_justified(|ui| { ui.spinner(); });
+                return;
+            }
+            if let Some(msg) = error {
+                ui.colored_label(Color32::RED, msg);
+                return;
+            }
+
+            let filter_lc = filter.to_lowercase();
+            let visible: Vec<&StorageEntry> = entries
+                .iter()
+                .filter(|e| {
+                    filter_lc.is_empty() || e.name.to_lowercase().contains(&filter_lc)
+                })
+                .collect();
+
+            let name_col_width = (ui.available_width() - FIXED_WIDTH).max(80.0);
+
+            TableBuilder::new(ui)
+                .striped(true)
+                .resizable(true)
+                .auto_shrink(false)
+                .column(Column::exact(24.0))                     // checkbox
+                .column(Column::exact(28.0))                     // icon
+                .column(Column::remainder().clip(false))         // name
+                .column(Column::initial(80.0).resizable(true))   // size
+                .column(Column::initial(130.0).resizable(true))  // modified
+                .column(Column::exact(28.0))                     // copy
+                .header(20.0, |mut h| {
+                    h.col(|_| {});
+                    h.col(|_| {});
+                    h.col(|ui| { ui.label(RichText::new("Name").strong()); });
+                    h.col(|ui| { ui.label(RichText::new("Size").strong()); });
+                    h.col(|ui| { ui.label(RichText::new("Modified").strong()); });
+                    h.col(|_| {});
+                })
+                .body(|body| {
+                    let heights = visible.iter().map(|e| row_height(&e.name, name_col_width));
+                    body.heterogeneous_rows(heights, |mut row| {
+                        let entry = visible[row.index()];
+                        let is_selected = selection.contains(&entry.path);
+
+                        // ── checkbox ──────────────────────────────────────────
+                        row.col(|ui| {
+                            ui.add_space(ROW_V_PAD);
+                            let mut checked = is_selected;
+                            if ui.checkbox(&mut checked, "").changed() {
+                                if checked {
+                                    sel_add.set(Some(entry.path.clone()));
+                                } else {
+                                    sel_remove.set(Some(entry.path.clone()));
+                                }
+                            }
+                        });
+
+                        // ── icon ──────────────────────────────────────────────
+                        row.col(|ui| {
+                            ui.add_space(ROW_V_PAD);
+                            ui.label(match &entry.kind {
+                                EntryKind::Directory => "📁",
+                                EntryKind::File      => file_icon(&entry.name),
+                            });
+                        });
+
+                        // ── name ──────────────────────────────────────────────
+                        row.col(|ui| {
+                            ui.add_space(ROW_V_PAD);
+                            let color = if is_selected {
+                                Color32::from_rgb(160, 210, 255)
+                            } else if entry.kind == EntryKind::Directory {
+                                Color32::from_rgb(100, 180, 255)
+                            } else {
+                                ui.visuals().text_color()
+                            };
+                            let resp = ui
+                                .add(
+                                    Label::new(RichText::new(&entry.name).color(color))
+                                        .wrap()
+                                        .sense(Sense::click()),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text(entry.path.to_string());
+
+                            if resp.clicked() {
+                                match entry.kind {
+                                    EntryKind::Directory => open_dir.set(Some(entry.path.clone())),
+                                    EntryKind::File      => download.set(vec![entry.path.clone()]),
+                                }
+                            }
+
+                            // Right-click context menu
+                            resp.context_menu(|ui| {
+                                if entry.kind == EntryKind::File
+                                    && ui.button("⬇ Download").clicked()
+                                {
+                                    download.set(vec![entry.path.clone()]);
+                                    ui.close_menu();
+                                }
+                                let del_label = if is_selected && selection.len() > 1 {
+                                    format!("🗑 Delete ({} selected)", selection.len())
+                                } else {
+                                    "🗑 Delete".to_owned()
+                                };
+                                if ui
+                                    .add(Button::new(del_label).fill(Color32::from_rgb(180, 40, 40)))
+                                    .clicked()
+                                {
+                                    let paths = if is_selected && selection.len() > 1 {
+                                        selection.iter().cloned().collect()
+                                    } else {
+                                        vec![entry.path.clone()]
+                                    };
+                                    delete.set(paths);
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                upload_item(ui, transfer_busy, &upload);
+                            });
+                        });
+
+                        // ── size ──────────────────────────────────────────────
+                        row.col(|ui| {
+                            ui.add_space(ROW_V_PAD);
+                            if let Some(sz) = entry.size {
+                                ui.label(
+                                    RichText::new(human_size(sz)).color(Color32::GRAY).small(),
+                                );
+                            }
+                        });
+
+                        // ── modified ──────────────────────────────────────────
+                        row.col(|ui| {
+                            ui.add_space(ROW_V_PAD);
+                            if let Some(ts) = entry.last_modified {
+                                ui.label(
+                                    RichText::new(ts.format("%Y-%m-%d %H:%M").to_string())
+                                        .color(Color32::GRAY)
+                                        .small(),
+                                );
+                            }
+                        });
+
+                        // ── copy path ─────────────────────────────────────────
+                        row.col(|ui| {
+                            ui.add_space(ROW_V_PAD);
+                            let path_str = entry.path.to_string();
+                            if ui
+                                .button("⎘")
+                                .on_hover_text(format!("Copy: {path_str}"))
+                                .clicked()
+                            {
+                                ui.ctx().copy_text(path_str);
+                            }
+                        });
+                    });
+                });
         });
+    });
 
     FileListResponse {
-        open_dir: open_dir.into_inner(),
-        download: download.into_inner(),
-        upload: upload.get(),
+        open_dir:   open_dir.into_inner(),
+        download:   download.into_inner(),
+        delete:     delete.into_inner(),
+        upload:     upload.get(),
+        sel_add:    sel_add.into_inner(),
+        sel_remove: sel_remove.into_inner(),
+        sel_clear:  sel_clear.get(),
+    }
+}
+
+fn upload_item(ui: &mut Ui, transfer_busy: bool, upload: &Cell<bool>) {
+    if ui
+        .add_enabled(!transfer_busy, Button::new("＋  Upload file"))
+        .on_hover_text("Upload a file to the current location")
+        .clicked()
+    {
+        upload.set(true);
+        ui.close_menu();
     }
 }

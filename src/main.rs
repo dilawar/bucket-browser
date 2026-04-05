@@ -4,6 +4,35 @@ use anyhow::Result;
 use s3_explorer::app::S3Explorer;
 use s3_explorer::storage::{S3Backend, StoragePath};
 
+fn setup_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    fonts.font_data.insert(
+        "Lato".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/Lato-Regular.ttf")).into(),
+    );
+    fonts.font_data.insert(
+        "JetBrainsMono".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf")).into(),
+    );
+
+    // Lato as the default proportional (sans-serif) font.
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "Lato".to_owned());
+
+    // JetBrains Mono as the monospace font.
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .insert(0, "JetBrainsMono".to_owned());
+
+    ctx.set_fonts(fonts);
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -32,7 +61,11 @@ fn main() -> Result<()> {
     eframe::run_native(
         "S3 Explorer",
         options,
-        Box::new(move |_cc| Ok(Box::new(app))),
+        Box::new(move |cc| {
+            cc.egui_ctx.set_visuals(egui::Visuals::light());
+            setup_fonts(&cc.egui_ctx);
+            Ok(Box::new(app))
+        }),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {e}"))?;
 

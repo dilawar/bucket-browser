@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use egui::{CentralPanel, Color32, RichText, SidePanel, TopBottomPanel};
@@ -31,6 +32,8 @@ pub struct S3Explorer {
     history: Vec<StoragePath>,
     history_pos: usize,
     filter: String,
+    selection: HashSet<StoragePath>,
+    dark_mode: bool,
     needs_initial_load: bool,
     transfer: Option<TransferHandle>,
     transfer_msg: Option<String>,
@@ -54,6 +57,8 @@ impl S3Explorer {
             history: vec![start],
             history_pos: 0,
             filter: String::new(),
+            selection: HashSet::new(),
+            dark_mode: false,
             needs_initial_load: true,
             transfer: None,
             transfer_msg: None,
@@ -78,6 +83,8 @@ impl S3Explorer {
             history: vec![],
             history_pos: 0,
             filter: String::new(),
+            selection: HashSet::new(),
+            dark_mode: false,
             needs_initial_load: false,
             transfer: None,
             transfer_msg: None,
@@ -116,12 +123,26 @@ impl S3Explorer {
 
     // ── transfers ─────────────────────────────────────────────────────────────
 
-    fn start_download(&mut self, path: StoragePath, ctx: &egui::Context) {
+    fn start_download(&mut self, paths: Vec<StoragePath>, ctx: &egui::Context) {
         let Some(backend) = &self.backend else { return };
         self.transfer_msg = None;
         self.transfer = Some(async_rt::spawn_download(
             Arc::clone(backend),
-            path,
+            paths,
+            ctx.clone(),
+            &self.rt,
+        ));
+    }
+
+    fn start_delete(&mut self, paths: Vec<StoragePath>, ctx: &egui::Context) {
+        let Some(backend) = &self.backend else { return };
+        self.transfer_msg = None;
+        for p in &paths {
+            self.selection.remove(p);
+        }
+        self.transfer = Some(async_rt::spawn_delete(
+            Arc::clone(backend),
+            paths,
             ctx.clone(),
             &self.rt,
         ));
@@ -164,6 +185,7 @@ impl S3Explorer {
     // ── navigation ────────────────────────────────────────────────────────────
 
     fn navigate_to(&mut self, path: StoragePath, ctx: &egui::Context) {
+        self.selection.clear();
         self.history.truncate(self.history_pos + 1);
         self.history.push(path.clone());
         self.history_pos = self.history.len() - 1;
@@ -288,7 +310,16 @@ impl S3Explorer {
         let busy = self.transfer_busy();
 
         TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            let resp = toolbar::show(ui, &mut self.path_input, can_back, can_forward, can_up);
+            let resp = toolbar::show(ui, &mut self.path_input, can_back, can_forward, can_up, self.dark_mode);
+            if resp.toggle_theme {
+                self.dark_mode = !self.dark_mode;
+                let visuals = if self.dark_mode {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                };
+                ctx.set_visuals(visuals);
+            }
             if resp.go_back {
                 self.go_back(ctx);
             }
@@ -353,6 +384,7 @@ impl S3Explorer {
                 ui,
                 &self.entries,
                 &mut self.filter,
+                &self.selection,
                 self.loading,
                 self.error.as_deref(),
                 busy,
@@ -360,10 +392,21 @@ impl S3Explorer {
             if let Some(dir) = resp.open_dir {
                 self.navigate_to(dir, ctx);
             }
-            if let Some(file) = resp.download
-                && !busy {
-                    self.start_download(file, ctx);
-                }
+            if let Some(p) = resp.sel_add {
+                self.selection.insert(p);
+            }
+            if let Some(p) = resp.sel_remove {
+                self.selection.remove(&p);
+            }
+            if resp.sel_clear {
+                self.selection.clear();
+            }
+            if !resp.download.is_empty() && !busy {
+                self.start_download(resp.download, ctx);
+            }
+            if !resp.delete.is_empty() && !busy {
+                self.start_delete(resp.delete, ctx);
+            }
             if resp.upload && !busy {
                 self.start_upload(ctx);
             }

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::TryStreamExt;
 use object_store::{ObjectStore, aws::AmazonS3Builder};
 use tracing::debug;
 
@@ -171,6 +172,33 @@ impl Backend for S3Backend {
             .put(&os_path, data.into())
             .await
             .with_context(|| format!("uploading to s3://{bucket}/{prefix}"))?;
+        Ok(())
+    }
+
+    async fn delete(&self, path: &StoragePath) -> Result<()> {
+        let StoragePath::S3 { bucket, prefix } = path else {
+            bail!("S3Backend cannot handle {path:?}");
+        };
+        if prefix.ends_with('/') || prefix.is_empty() {
+            // Virtual directory: delete every object with this prefix.
+            let os_prefix = object_store::path::Path::from(prefix.trim_end_matches('/'));
+            debug!("S3 delete-prefix s3://{bucket}/{prefix}");
+            let locations: Vec<_> = self
+                .store
+                .list(Some(&os_prefix))
+                .map_ok(|m| m.location)
+                .try_collect()
+                .await?;
+            for loc in locations {
+                self.store.delete(&loc).await
+                    .with_context(|| format!("deleting s3://{bucket}/{loc}"))?;
+            }
+        } else {
+            debug!("S3 delete s3://{bucket}/{prefix}");
+            let os_path = object_store::path::Path::from(prefix.as_str());
+            self.store.delete(&os_path).await
+                .with_context(|| format!("deleting s3://{bucket}/{prefix}"))?;
+        }
         Ok(())
     }
 

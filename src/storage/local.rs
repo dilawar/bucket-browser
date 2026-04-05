@@ -34,6 +34,18 @@ impl Backend for LocalBackend {
         Ok(())
     }
 
+    async fn delete(&self, path: &StoragePath) -> Result<()> {
+        let StoragePath::Local(p) = path else {
+            bail!("LocalBackend cannot handle {path:?}");
+        };
+        if p.is_dir() {
+            tokio::fs::remove_dir_all(p).await?;
+        } else {
+            tokio::fs::remove_file(p).await?;
+        }
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "Local"
     }
