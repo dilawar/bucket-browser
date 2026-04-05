@@ -85,7 +85,7 @@ pub fn show(
         if ui
             .add_sized(
                 [ui.available_width(), 32.0],
-                Button::new(RichText::new("＋  Upload file").strong().color(Color32::WHITE))
+                Button::new(RichText::new("+ Upload file").strong().size(15.0).color(Color32::WHITE))
                     .fill(color)
                     .corner_radius(6.0),
             )
@@ -101,7 +101,7 @@ pub fn show(
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             // Filter bar
             ui.horizontal(|ui| {
-                ui.label("🔍");
+                ui.label(RichText::new("🔍").size(18.0));
                 ui.add(
                     egui::TextEdit::singleline(filter)
                         .hint_text("Filter…")
@@ -225,10 +225,10 @@ pub fn show(
                         // ── icon ──────────────────────────────────────────────
                         row.col(|ui| {
                             ui.add_space(ROW_V_PAD);
-                            ui.label(match &entry.kind {
+                            ui.label(RichText::new(match &entry.kind {
                                 EntryKind::Directory => "📁",
                                 EntryKind::File      => file_icon(&entry.name),
-                            });
+                            }).size(18.0));
                         });
 
                         // ── name ──────────────────────────────────────────────
@@ -316,7 +316,7 @@ pub fn show(
                             ui.add_space(ROW_V_PAD);
                             let path_str = entry.path.to_string();
                             if ui
-                                .button("⎘")
+                                .button(RichText::new("⎘").size(16.0))
                                 .on_hover_text(format!("Copy: {path_str}"))
                                 .clicked()
                             {
@@ -341,7 +341,7 @@ pub fn show(
 
 fn upload_item(ui: &mut Ui, transfer_busy: bool, upload: &Cell<bool>) {
     if ui
-        .add_enabled(!transfer_busy, Button::new("＋  Upload file"))
+        .add_enabled(!transfer_busy, Button::new("+ Upload file"))
         .on_hover_text("Upload a file to the current location")
         .clicked()
     {
