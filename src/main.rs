@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use egui::FontId;
 use s3_explorer::app::S3Explorer;
 use s3_explorer::storage::{S3Backend, StoragePath};
+
+const APP_TITLE: &str = "S3 Compatible Bucket Browser";
 
 fn setup_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -13,7 +16,8 @@ fn setup_fonts(ctx: &egui::Context) {
     );
     fonts.font_data.insert(
         "JetBrainsMono".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf")).into(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"))
+            .into(),
     );
 
     // Lato as the default proportional (sans-serif) font.
@@ -31,6 +35,17 @@ fn setup_fonts(ctx: &egui::Context) {
         .insert(0, "JetBrainsMono".to_owned());
 
     ctx.set_fonts(fonts);
+
+    // Enforce minimum readable sizes — nothing smaller than 13 px (≈ 10 pt).
+    ctx.style_mut(|style| {
+        use egui::{FontFamily::Proportional, TextStyle::*};
+        style.text_styles.insert(Body,     FontId::new(14.0, Proportional));
+        style.text_styles.insert(Button,   FontId::new(14.0, Proportional));
+        // "Small" is used for hints and secondary labels; floor at 13 px.
+        style.text_styles.insert(Small,    FontId::new(13.0, Proportional));
+        style.text_styles.insert(Heading,  FontId::new(22.0, Proportional));
+        style.text_styles.insert(Monospace, FontId::new(13.0, egui::FontFamily::Monospace));
+    });
 }
 
 fn main() -> Result<()> {
@@ -50,7 +65,7 @@ fn main() -> Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("S3 Explorer")
+            .with_title(APP_TITLE)
             .with_inner_size([1100.0, 700.0]),
         ..Default::default()
     };
@@ -59,7 +74,7 @@ fn main() -> Result<()> {
     let _rt = rt;
 
     eframe::run_native(
-        "S3 Explorer",
+        APP_TITLE,
         options,
         Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::light());
@@ -89,9 +104,10 @@ fn resolve_startup(rt: tokio::runtime::Handle) -> S3Explorer {
     if let Some(arg) = std::env::args().nth(1) {
         let path = StoragePath::parse(&arg);
         if let StoragePath::Local(ref pb) = path
-            && pb.exists() {
-                return S3Explorer::new(Arc::new(LocalBackend), path, rt);
-            }
+            && pb.exists()
+        {
+            return S3Explorer::new(Arc::new(LocalBackend), path, rt);
+        }
     }
 
     // Priority 3: show config form (pre-filled from env/saved creds).

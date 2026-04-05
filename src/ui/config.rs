@@ -171,10 +171,10 @@ pub fn show(ui: &mut Ui, f: &mut ConfigFields, error: Option<&str>) -> ConfigRes
         ui.label(
             RichText::new(
                 "Paste a connection URI, or fill the fields below.  \
-                 Credentials are kept separate."
+                 Credentials are kept separate.",
             )
-            .small()
-            .color(Color32::GRAY),
+            .size(13.0)
+            .color(Color32::from_gray(90)),
         );
         ui.add_space(12.0);
 
@@ -259,7 +259,11 @@ pub fn show(ui: &mut Ui, f: &mut ConfigFields, error: Option<&str>) -> ConfigRes
         ui.add_space(8.0);
 
         if let Some(msg) = error {
-            ui.colored_label(Color32::RED, msg);
+            ui.label(
+                RichText::new(format!("✗  {msg}"))
+                    .color(Color32::from_rgb(180, 30, 30))
+                    .size(13.0),
+            );
             ui.add_space(4.0);
         }
 
@@ -290,8 +294,8 @@ pub fn show(ui: &mut Ui, f: &mut ConfigFields, error: Option<&str>) -> ConfigRes
         ui.add_space(8.0);
         ui.label(
             RichText::new("Set AWS_S3_BUCKET + credential env vars to skip this screen.")
-                .small()
-                .color(Color32::GRAY),
+                .size(13.0)
+                .color(Color32::from_gray(90)),
         );
     });
 

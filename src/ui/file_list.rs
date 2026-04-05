@@ -168,7 +168,10 @@ pub fn show(
                 return;
             }
             if let Some(msg) = error {
-                ui.colored_label(Color32::RED, msg);
+                ui.label(
+                    RichText::new(format!("✗  {msg}"))
+                        .color(Color32::from_rgb(180, 30, 30)),
+                );
                 return;
             }
 
@@ -289,7 +292,9 @@ pub fn show(
                             ui.add_space(ROW_V_PAD);
                             if let Some(sz) = entry.size {
                                 ui.label(
-                                    RichText::new(human_size(sz)).color(Color32::GRAY).small(),
+                                    RichText::new(human_size(sz))
+                                        .color(Color32::from_gray(90))
+                                        .size(13.0),
                                 );
                             }
                         });
@@ -300,8 +305,8 @@ pub fn show(
                             if let Some(ts) = entry.last_modified {
                                 ui.label(
                                     RichText::new(ts.format("%Y-%m-%d %H:%M").to_string())
-                                        .color(Color32::GRAY)
-                                        .small(),
+                                        .color(Color32::from_gray(90))
+                                        .size(13.0),
                                 );
                             }
                         });

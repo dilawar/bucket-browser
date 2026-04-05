@@ -342,27 +342,30 @@ impl S3Explorer {
             ui.horizontal(|ui| {
                 let backend_name = self.backend.as_ref().map_or("—", |b| b.name());
                 let n = self.entries.len();
+                // Dark enough for WCAG AA on both light and dark backgrounds.
+                let muted = Color32::from_gray(90);
                 ui.label(
                     RichText::new(format!(
                         "{backend_name}  ·  {n} item{}",
                         if n == 1 { "" } else { "s" }
                     ))
-                    .small()
-                    .color(Color32::GRAY),
+                    .size(13.0)
+                    .color(muted),
                 );
 
                 if busy {
                     ui.separator();
                     ui.spinner();
-                    ui.label(RichText::new("Transferring…").small().color(Color32::GRAY));
+                    ui.label(RichText::new("Transferring…").size(13.0).color(muted));
                 } else if let Some(msg) = &self.transfer_msg {
                     ui.separator();
-                    let color = if msg.starts_with("Error") {
-                        Color32::RED
+                    // Use icon prefix so status is never conveyed by colour alone.
+                    let (prefix, color) = if msg.starts_with("Error") {
+                        ("✗ ", Color32::from_rgb(180, 30, 30))
                     } else {
-                        Color32::from_rgb(80, 200, 120)
+                        ("✓ ", Color32::from_rgb(20, 120, 60))
                     };
-                    ui.label(RichText::new(msg).small().color(color));
+                    ui.label(RichText::new(format!("{prefix}{msg}")).size(13.0).color(color));
                 }
             });
         });
