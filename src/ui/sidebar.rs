@@ -2,22 +2,18 @@ use egui::{Color32, RichText, Ui};
 
 use crate::storage::StoragePath;
 
+#[derive(Default)]
 pub struct SidebarResponse {
     pub navigate_to: Option<StoragePath>,
 }
 
 const INDENT: f32 = 14.0;
 
-pub fn show(ui: &mut Ui, current_path: &StoragePath, filter: &mut String) -> SidebarResponse {
+pub fn show(ui: &mut Ui, current_path: &StoragePath) -> SidebarResponse {
     let mut navigate_to = None;
 
     ui.heading("Location");
     ui.separator();
-
-    // Filter above the tree.
-    ui.label("Filter:");
-    ui.add(egui::TextEdit::singleline(filter).desired_width(f32::INFINITY));
-    ui.add_space(6.0);
 
     // Breadcrumb tree with indentation per depth level.
     let crumbs = current_path.breadcrumbs();
@@ -34,7 +30,13 @@ pub fn show(ui: &mut Ui, current_path: &StoragePath, filter: &mut String) -> Sid
             if is_last {
                 ui.add(egui::Label::new(RichText::new(&label).strong()).truncate());
             } else if ui
-                .add(egui::Label::new(egui::RichText::new(&label).color(ui.visuals().hyperlink_color)).truncate().sense(egui::Sense::click()))
+                .add(
+                    egui::Label::new(
+                        egui::RichText::new(&label).color(ui.visuals().hyperlink_color),
+                    )
+                    .truncate()
+                    .sense(egui::Sense::click()),
+                )
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {

@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
+use bytes::Bytes;
 use tracing::{debug, warn};
 
 use super::backend::Backend;
-use super::path::{EntryKind, StorageEntry, StoragePath};
+use super::path::{EntryKind, StorageEntry, StoragePath, sort_entries};
 
 pub struct LocalBackend;
 
@@ -16,6 +17,21 @@ impl Backend for LocalBackend {
             bail!("LocalBackend cannot handle {path:?}");
         };
         Ok(list_dir(dir, path))
+    }
+
+    async fn get(&self, path: &StoragePath) -> Result<Bytes> {
+        let StoragePath::Local(p) = path else {
+            bail!("LocalBackend cannot handle {path:?}");
+        };
+        Ok(Bytes::from(tokio::fs::read(p).await?))
+    }
+
+    async fn put(&self, path: &StoragePath, data: Bytes) -> Result<()> {
+        let StoragePath::Local(p) = path else {
+            bail!("LocalBackend cannot handle {path:?}");
+        };
+        tokio::fs::write(p, data).await?;
+        Ok(())
     }
 
     fn name(&self) -> &str {
@@ -35,20 +51,25 @@ fn list_dir(dir: &PathBuf, parent: &StoragePath) -> Vec<StorageEntry> {
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let meta = e.metadata().ok()?;
-            let kind = if meta.is_dir() { EntryKind::Directory } else { EntryKind::File };
-            let size = kind.is_file().then(|| meta.len());
+            let kind = if meta.is_dir() {
+                EntryKind::Directory
+            } else {
+                EntryKind::File
+            };
+            let size = kind.is_file().then_some(meta.len());
             let last_modified = meta.modified().ok().map(|t| t.into());
             let path = parent.child(&name);
             // For local files the child() appends "/" for dirs; strip trailing slash from name
-            Some(StorageEntry { name, path, kind, size, last_modified })
+            Some(StorageEntry {
+                name,
+                path,
+                kind,
+                size,
+                last_modified,
+            })
         })
         .collect();
 
-    entries.sort_by(|a, b| match (&a.kind, &b.kind) {
-        (EntryKind::Directory, EntryKind::File) => std::cmp::Ordering::Less,
-        (EntryKind::File, EntryKind::Directory) => std::cmp::Ordering::Greater,
-        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-    });
-
+    sort_entries(&mut entries);
     entries
 }

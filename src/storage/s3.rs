@@ -1,10 +1,11 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
-use object_store::{aws::AmazonS3Builder, ObjectStore};
+use bytes::Bytes;
+use object_store::{ObjectStore, aws::AmazonS3Builder};
 use tracing::debug;
 
 use super::backend::Backend;
-use super::path::{EntryKind, StorageEntry, StoragePath};
+use super::path::{EntryKind, StorageEntry, StoragePath, sort_entries};
 
 pub struct S3Backend {
     store: object_store::aws::AmazonS3,
@@ -30,8 +31,8 @@ impl S3Backend {
     /// Reads `AWS_S3_BUCKET` for the bucket name plus the standard AWS credential vars.
     /// Returns `Err` if `AWS_S3_BUCKET` is unset or the client cannot be built.
     pub fn from_env() -> Result<Self> {
-        let bucket = std::env::var(ENV_BUCKET)
-            .with_context(|| format!("{ENV_BUCKET} is not set"))?;
+        let bucket =
+            std::env::var(ENV_BUCKET).with_context(|| format!("{ENV_BUCKET} is not set"))?;
         let store = AmazonS3Builder::from_env()
             .with_bucket_name(&bucket)
             .build()
@@ -76,6 +77,15 @@ impl S3Backend {
     }
 }
 
+/// Extract the last path segment, stripping trailing slashes.
+fn last_segment(key: &str) -> String {
+    key.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(key)
+        .to_owned()
+}
+
 #[async_trait]
 impl Backend for S3Backend {
     async fn list(&self, path: &StoragePath) -> Result<Vec<StorageEntry>> {
@@ -106,15 +116,10 @@ impl Backend for S3Backend {
         // Common prefixes → virtual directories
         for cp in result.common_prefixes {
             let key = cp.to_string(); // e.g. "foo/bar/"
-            let name = key
-                .trim_end_matches('/')
-                .rsplit('/')
-                .next()
-                .unwrap_or(&key)
-                .to_owned();
+            let name = last_segment(&key);
             entries.push(StorageEntry {
                 name,
-                path: StoragePath::S3 { bucket: bucket.clone(), prefix: key },
+                path: StoragePath::s3(bucket, &key),
                 kind: EntryKind::Directory,
                 size: None,
                 last_modified: None,
@@ -124,26 +129,49 @@ impl Backend for S3Backend {
         // Objects → files
         for obj in result.objects {
             let key = obj.location.to_string(); // e.g. "foo/bar/file.txt"
-            let name = key.rsplit('/').next().unwrap_or(&key).to_owned();
+            let name = last_segment(&key);
             if name.is_empty() {
                 continue; // skip "directory placeholder" objects (key ends with "/")
             }
             entries.push(StorageEntry {
                 name,
-                path: StoragePath::S3 { bucket: bucket.clone(), prefix: key },
+                path: StoragePath::s3(bucket, &key),
                 kind: EntryKind::File,
                 size: Some(obj.size as u64),
                 last_modified: Some(obj.last_modified),
             });
         }
 
-        entries.sort_by(|a, b| match (&a.kind, &b.kind) {
-            (EntryKind::Directory, EntryKind::File) => std::cmp::Ordering::Less,
-            (EntryKind::File, EntryKind::Directory) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        });
+        sort_entries(&mut entries);
 
         Ok(entries)
+    }
+
+    async fn get(&self, path: &StoragePath) -> Result<Bytes> {
+        let StoragePath::S3 { bucket, prefix } = path else {
+            bail!("S3Backend cannot handle {path:?}");
+        };
+        debug!("S3 get s3://{bucket}/{prefix}");
+        let os_path = object_store::path::Path::from(prefix.as_str());
+        let result = self
+            .store
+            .get(&os_path)
+            .await
+            .with_context(|| format!("downloading s3://{bucket}/{prefix}"))?;
+        Ok(result.bytes().await?)
+    }
+
+    async fn put(&self, path: &StoragePath, data: Bytes) -> Result<()> {
+        let StoragePath::S3 { bucket, prefix } = path else {
+            bail!("S3Backend cannot handle {path:?}");
+        };
+        debug!("S3 put s3://{bucket}/{prefix} ({} bytes)", data.len());
+        let os_path = object_store::path::Path::from(prefix.as_str());
+        self.store
+            .put(&os_path, data.into())
+            .await
+            .with_context(|| format!("uploading to s3://{bucket}/{prefix}"))?;
+        Ok(())
     }
 
     fn name(&self) -> &str {

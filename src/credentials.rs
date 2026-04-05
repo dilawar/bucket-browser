@@ -73,8 +73,7 @@ impl CredentialStore {
         data.extend_from_slice(&ciphertext);
 
         let path = self.config_dir.join(CREDS_FILE);
-        std::fs::write(&path, &data)
-            .with_context(|| format!("writing credentials to {path:?}"))?;
+        std::fs::write(&path, &data).with_context(|| format!("writing credentials to {path:?}"))?;
         info!("Credentials saved to {path:?}");
         Ok(())
     }
@@ -83,8 +82,7 @@ impl CredentialStore {
     pub fn delete(&self) -> Result<()> {
         let path = self.config_dir.join(CREDS_FILE);
         if path.exists() {
-            std::fs::remove_file(&path)
-                .with_context(|| format!("deleting {path:?}"))?;
+            std::fs::remove_file(&path).with_context(|| format!("deleting {path:?}"))?;
             info!("Saved credentials deleted");
         }
         Ok(())
@@ -102,8 +100,7 @@ fn project_config_dir() -> Result<PathBuf> {
 fn load_or_generate_key(dir: &PathBuf) -> Result<Key<Aes256Gcm>> {
     let path = dir.join(KEY_FILE);
     if path.exists() {
-        let bytes = std::fs::read(&path)
-            .with_context(|| format!("reading key file {path:?}"))?;
+        let bytes = std::fs::read(&path).with_context(|| format!("reading key file {path:?}"))?;
         let arr: [u8; 32] = bytes
             .try_into()
             .map_err(|_| anyhow::anyhow!("key file has wrong length (expected 32 bytes)"))?;

@@ -36,13 +36,17 @@ check:
 lint:
     cargo clippy -- -D warnings
 
+fix:
+    cargo clippy --fix --allow-dirty
+
+
 # Format source code
 fmt:
-    cargo fmt
+    cargo +nightly fmt
 
 # Check formatting without modifying files
 fmt-check:
-    cargo fmt -- --check
+    cargo +nightly fmt -- --check
 
 # Run all tests
 test:

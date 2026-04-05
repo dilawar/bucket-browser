@@ -2,6 +2,7 @@ use egui::{Button, Key, TextEdit, Ui};
 
 use crate::storage::StoragePath;
 
+#[derive(Default)]
 pub struct ToolbarResponse {
     pub navigate_to: Option<StoragePath>,
     pub go_back: bool,
@@ -17,13 +18,7 @@ pub fn show(
     can_forward: bool,
     can_up: bool,
 ) -> ToolbarResponse {
-    let mut resp = ToolbarResponse {
-        navigate_to: None,
-        go_back: false,
-        go_forward: false,
-        go_up: false,
-        refresh: false,
-    };
+    let mut resp = ToolbarResponse::default();
 
     ui.horizontal(|ui| {
         resp.go_back = ui.add_enabled(can_back, Button::new("◀")).clicked();

@@ -10,13 +10,13 @@ pub struct ConfigFields {
     /// e.g. `s3://bucket/` or `s3://bucket/?endpoint=https%3A%2F%2F…&region=…`
     pub connection_uri: String,
     // Derived / individually editable fields (kept in sync with connection_uri).
-    pub bucket:    String,
-    pub endpoint:  String,  // raw, unencoded; blank = AWS default
-    pub region:    String,
+    pub bucket: String,
+    pub endpoint: String, // raw, unencoded; blank = AWS default
+    pub region: String,
     // Credentials — never encoded into the URI.
     pub access_key: String,
     pub secret_key: String,
-    pub remember:   bool,
+    pub remember: bool,
 }
 
 impl ConfigFields {
@@ -25,11 +25,11 @@ impl ConfigFields {
         let from_env = |var: &str| std::env::var(var).unwrap_or_default();
 
         let mut f = Self {
-            bucket:     from_env(ENV_BUCKET),
-            endpoint:   from_env(ENV_ENDPOINT),
+            bucket: from_env(ENV_BUCKET),
+            endpoint: from_env(ENV_ENDPOINT),
             access_key: from_env(ENV_ACCESS_KEY),
             secret_key: from_env(ENV_SECRET_KEY),
-            region:     from_env(ENV_REGION),
+            region: from_env(ENV_REGION),
             ..Default::default()
         };
 
@@ -37,11 +37,21 @@ impl ConfigFields {
             .ok()
             .and_then(|s| s.load())
         {
-            if f.bucket.is_empty()     { f.bucket     = saved.bucket; }
-            if f.endpoint.is_empty()   { f.endpoint   = saved.endpoint; }
-            if f.access_key.is_empty() { f.access_key = saved.access_key; }
-            if f.secret_key.is_empty() { f.secret_key = saved.secret_key; }
-            if f.region.is_empty()     { f.region     = saved.region; }
+            if f.bucket.is_empty() {
+                f.bucket = saved.bucket;
+            }
+            if f.endpoint.is_empty() {
+                f.endpoint = saved.endpoint;
+            }
+            if f.access_key.is_empty() {
+                f.access_key = saved.access_key;
+            }
+            if f.secret_key.is_empty() {
+                f.secret_key = saved.secret_key;
+            }
+            if f.region.is_empty() {
+                f.region = saved.region;
+            }
             f.remember = true;
         }
 
@@ -53,9 +63,9 @@ impl ConfigFields {
 
     /// Build a `s3://` URI from the current field values.
     pub fn compute_uri(&self) -> String {
-        let bucket   = self.bucket.trim();
+        let bucket = self.bucket.trim();
         let endpoint = self.endpoint.trim();
-        let region   = self.region.trim();
+        let region = self.region.trim();
 
         let mut params: Vec<String> = Vec::new();
         if !endpoint.is_empty() {
@@ -82,13 +92,9 @@ impl ConfigFields {
         if let Some(rest) = uri.strip_prefix("s3://") {
             let (authority, query) = match rest.split_once('?') {
                 Some((a, q)) => (a, q),
-                None         => (rest, ""),
+                None => (rest, ""),
             };
-            self.bucket = authority
-                .split('/')
-                .next()
-                .unwrap_or("")
-                .to_owned();
+            self.bucket = authority.split('/').next().unwrap_or("").to_owned();
             self.endpoint.clear();
             self.region.clear();
             for pair in query.split('&').filter(|s| !s.is_empty()) {
@@ -98,24 +104,23 @@ impl ConfigFields {
                         .unwrap_or_else(|_| v.to_owned());
                     match k {
                         "endpoint" => self.endpoint = decoded,
-                        "region"   => self.region   = decoded,
-                        _          => {}
+                        "region" => self.region = decoded,
+                        _ => {}
                     }
                 }
             }
         } else {
             // Accept `https://endpoint/bucket` and `http://endpoint/bucket`.
-            let (scheme, rest) =
-                if let Some(r) = uri.strip_prefix("https://") {
-                    ("https", r)
-                } else if let Some(r) = uri.strip_prefix("http://") {
-                    ("http", r)
-                } else {
-                    return; // unrecognised scheme — leave fields unchanged
-                };
+            let (scheme, rest) = if let Some(r) = uri.strip_prefix("https://") {
+                ("https", r)
+            } else if let Some(r) = uri.strip_prefix("http://") {
+                ("http", r)
+            } else {
+                return; // unrecognised scheme — leave fields unchanged
+            };
 
             let mut parts = rest.splitn(2, '/');
-            let host   = parts.next().unwrap_or("");
+            let host = parts.next().unwrap_or("");
             let bucket = parts.next().unwrap_or("").trim_end_matches('/');
 
             self.endpoint = format!("{scheme}://{host}");
@@ -125,11 +130,10 @@ impl ConfigFields {
 
             // Auto-extract region from Backblaze B2 hostnames:
             // s3.<region>.backblazeb2.com
-            if let Some(inner) = host.strip_suffix(".backblazeb2.com") {
-                if let Some(region) = inner.strip_prefix("s3.") {
+            if let Some(inner) = host.strip_suffix(".backblazeb2.com")
+                && let Some(region) = inner.strip_prefix("s3.") {
                     self.region = region.to_owned();
                 }
-            }
         }
     }
 
@@ -137,7 +141,11 @@ impl ConfigFields {
     /// Returns `None` for plain AWS (blank endpoint).
     pub fn resolved_endpoint(&self) -> Option<String> {
         let ep = self.endpoint.trim();
-        if ep.is_empty() { None } else { Some(ep.to_owned()) }
+        if ep.is_empty() {
+            None
+        } else {
+            Some(ep.to_owned())
+        }
     }
 }
 
