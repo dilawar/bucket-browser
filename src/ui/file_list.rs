@@ -283,6 +283,15 @@ pub fn show(
                                     ui.close_menu();
                                 }
                                 ui.separator();
+                                if ui
+                                    .button("⎘  Copy location")
+                                    .on_hover_text(entry.path.to_string())
+                                    .clicked()
+                                {
+                                    ui.ctx().copy_text(entry.path.to_string());
+                                    ui.close_menu();
+                                }
+                                ui.separator();
                                 upload_item(ui, transfer_busy, &upload);
                             });
                         });
