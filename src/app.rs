@@ -7,7 +7,7 @@ use tracing::info;
 use crate::async_rt::{self, ListingHandle, TransferHandle};
 use crate::download;
 use crate::storage::{Backend, StorageEntry, StoragePath};
-use crate::ui::{config, file_list, sidebar, toolbar};
+use crate::ui::{config, file_list, file_list::SortState, sidebar, toolbar};
 
 // ── App mode ──────────────────────────────────────────────────────────────────
 
@@ -33,6 +33,7 @@ pub struct S3Explorer {
     history: Vec<StoragePath>,
     history_pos: usize,
     filter: String,
+    sort: SortState,
     selection: HashSet<StoragePath>,
     dark_mode: bool,
     needs_initial_load: bool,
@@ -68,6 +69,7 @@ impl S3Explorer {
             history: vec![start],
             history_pos: 0,
             filter: String::new(),
+            sort: SortState::default(),
             selection: HashSet::new(),
             dark_mode: false,
             needs_initial_load: true,
@@ -81,7 +83,6 @@ impl S3Explorer {
 
     /// Start in configure mode; fields are pre-filled from env vars and saved credentials.
     pub fn needs_config(rt: tokio::runtime::Handle) -> Self {
-
         Self {
             mode: Mode::Configure {
                 fields: config::ConfigFields::load(),
@@ -97,6 +98,7 @@ impl S3Explorer {
             history: vec![],
             history_pos: 0,
             filter: String::new(),
+            sort: SortState::default(),
             selection: HashSet::new(),
             dark_mode: false,
             needs_initial_load: false,
@@ -127,14 +129,15 @@ impl S3Explorer {
 
     fn poll_listing(&mut self) {
         if let Some(handle) = &self.listing
-            && let Some(result) = handle.try_recv() {
-                self.loading = false;
-                self.listing = None;
-                match result {
-                    Ok(entries) => self.entries = entries,
-                    Err(e) => self.error = Some(e.to_string()),
-                }
+            && let Some(result) = handle.try_recv()
+        {
+            self.loading = false;
+            self.listing = None;
+            match result {
+                Ok(entries) => self.entries = entries,
+                Err(e) => self.error = Some(e.to_string()),
             }
+        }
     }
 
     // ── transfers ─────────────────────────────────────────────────────────────
@@ -177,21 +180,22 @@ impl S3Explorer {
 
     fn poll_transfer(&mut self, ctx: &egui::Context) {
         if let Some(handle) = &self.transfer
-            && let Some(result) = handle.try_recv() {
-                self.transfer = None;
-                match result {
-                    Ok(msg) => {
-                        info!("{msg}");
-                        self.transfer_msg = Some(msg);
-                        // Refresh the listing so newly uploaded files appear.
-                        let path = self.current_path.clone();
-                        self.request_listing(path, ctx);
-                    }
-                    Err(e) => {
-                        self.transfer_msg = Some(format!("Error: {e}"));
-                    }
+            && let Some(result) = handle.try_recv()
+        {
+            self.transfer = None;
+            match result {
+                Ok(msg) => {
+                    info!("{msg}");
+                    self.transfer_msg = Some(msg);
+                    // Refresh the listing so newly uploaded files appear.
+                    let path = self.current_path.clone();
+                    self.request_listing(path, ctx);
+                }
+                Err(e) => {
+                    self.transfer_msg = Some(format!("Error: {e}"));
                 }
             }
+        }
     }
 
     fn transfer_busy(&self) -> bool {
@@ -227,7 +231,10 @@ impl S3Explorer {
         let slot = std::sync::Arc::new(std::sync::Mutex::new(None::<Option<u64>>));
         let slot2 = std::sync::Arc::clone(&slot);
         rt.spawn(async move {
-            let size = download::estimate_size(backend, &paths_clone).await.ok().flatten();
+            let size = download::estimate_size(backend, &paths_clone)
+                .await
+                .ok()
+                .flatten();
             *slot2.lock().unwrap() = Some(size);
             ctx2.request_repaint();
         });
@@ -240,7 +247,8 @@ impl S3Explorer {
             if p.is_dir() {
                 None // directory size unknown without listing
             } else {
-                self.entries.iter()
+                self.entries
+                    .iter()
                     .find(|e| &e.path == p)
                     .and_then(|e| e.size)
                     .map(|s| acc.saturating_add(s))
@@ -433,7 +441,10 @@ impl S3Explorer {
                 ));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    if ui.button(egui::RichText::new("Download").strong()).clicked() {
+                    if ui
+                        .button(egui::RichText::new("Download").strong())
+                        .clicked()
+                    {
                         confirmed = true;
                     }
                     if ui.button("Cancel").clicked() {
@@ -442,7 +453,11 @@ impl S3Explorer {
                 });
             });
             if confirmed {
-                let ZipConfirm { paths, current_path, .. } = self.zip_confirm.take().unwrap();
+                let ZipConfirm {
+                    paths,
+                    current_path,
+                    ..
+                } = self.zip_confirm.take().unwrap();
                 let Some(backend) = &self.backend else { return };
                 self.transfer_msg = None;
                 self.transfer = Some(download::spawn_download_zip(
@@ -463,7 +478,14 @@ impl S3Explorer {
         let busy = self.transfer_busy();
 
         TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            let resp = toolbar::show(ui, &mut self.path_input, can_back, can_forward, can_up, self.dark_mode);
+            let resp = toolbar::show(
+                ui,
+                &mut self.path_input,
+                can_back,
+                can_forward,
+                can_up,
+                self.dark_mode,
+            );
             if resp.toggle_theme {
                 self.dark_mode = !self.dark_mode;
                 let visuals = if self.dark_mode {
@@ -518,7 +540,11 @@ impl S3Explorer {
                     } else {
                         ("✓ ", Color32::from_rgb(20, 120, 60))
                     };
-                    ui.label(RichText::new(format!("{prefix}{msg}")).size(13.0).color(color));
+                    ui.label(
+                        RichText::new(format!("{prefix}{msg}"))
+                            .size(13.0)
+                            .color(color),
+                    );
                 }
             });
         });
@@ -540,6 +566,7 @@ impl S3Explorer {
                 ui,
                 &self.entries,
                 &mut self.filter,
+                &mut self.sort,
                 &self.selection,
                 self.loading,
                 self.error.as_deref(),
@@ -559,7 +586,9 @@ impl S3Explorer {
             }
             if let Some(path) = resp.copy_url {
                 // Synchronous — build the URL from stored fields, no network needed.
-                let url = self.backend.as_ref()
+                let url = self
+                    .backend
+                    .as_ref()
                     .and_then(|b| b.public_url(&path))
                     .unwrap_or_else(|| path.to_string());
                 ctx.copy_text(url);

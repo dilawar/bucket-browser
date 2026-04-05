@@ -202,20 +202,26 @@ impl Backend for S3Backend {
                 .try_collect()
                 .await?;
             for loc in locations {
-                self.store.delete(&loc).await
+                self.store
+                    .delete(&loc)
+                    .await
                     .with_context(|| format!("deleting s3://{bucket}/{loc}"))?;
             }
         } else {
             debug!("S3 delete s3://{bucket}/{prefix}");
             let os_path = object_store::path::Path::from(prefix.as_str());
-            self.store.delete(&os_path).await
+            self.store
+                .delete(&os_path)
+                .await
                 .with_context(|| format!("deleting s3://{bucket}/{prefix}"))?;
         }
         Ok(())
     }
 
     fn public_url(&self, path: &StoragePath) -> Option<String> {
-        let StoragePath::S3 { bucket, prefix } = path else { return None; };
+        let StoragePath::S3 { bucket, prefix } = path else {
+            return None;
+        };
         let key = prefix.trim_end_matches('/');
         Some(match &self.endpoint {
             // Custom endpoint (Backblaze, MinIO, …): path-style URL.
@@ -233,7 +239,8 @@ impl Backend for S3Backend {
             bail!("not an S3 path");
         };
         let os_path = object_store::path::Path::from(prefix.as_str());
-        let url = self.store
+        let url = self
+            .store
             .signed_url(http::Method::GET, &os_path, expires)
             .await
             .context("generating presigned URL")?;

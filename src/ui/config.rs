@@ -131,9 +131,10 @@ impl ConfigFields {
             // Auto-extract region from Backblaze B2 hostnames:
             // s3.<region>.backblazeb2.com
             if let Some(inner) = host.strip_suffix(".backblazeb2.com")
-                && let Some(region) = inner.strip_prefix("s3.") {
-                    self.region = region.to_owned();
-                }
+                && let Some(region) = inner.strip_prefix("s3.")
+            {
+                self.region = region.to_owned();
+            }
         }
     }
 

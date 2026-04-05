@@ -150,5 +150,9 @@ where
 
 /// Extract the last path segment (filename) from an S3 key or local path string.
 pub(crate) fn base_name(s: &str) -> String {
-    s.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_owned()
+    s.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_owned()
 }

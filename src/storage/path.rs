@@ -103,9 +103,7 @@ impl StoragePath {
     pub fn child(&self, name: &str) -> Self {
         match self {
             Self::Local(p) => Self::Local(p.join(name)),
-            Self::S3 { bucket, prefix } => {
-                Self::s3(bucket, format!("{}/", s3_join(prefix, name)))
-            }
+            Self::S3 { bucket, prefix } => Self::s3(bucket, format!("{}/", s3_join(prefix, name))),
         }
     }
 

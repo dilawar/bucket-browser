@@ -99,7 +99,9 @@ pub fn spawn_download_zip(
     ctx: egui::Context,
     rt: &tokio::runtime::Handle,
 ) -> TransferHandle {
-    spawn_transfer(rt, ctx, move || do_download_zip(backend, paths, current_path))
+    spawn_transfer(rt, ctx, move || {
+        do_download_zip(backend, paths, current_path)
+    })
 }
 
 async fn do_download_zip(

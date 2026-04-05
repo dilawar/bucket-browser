@@ -4,7 +4,45 @@ use std::collections::HashSet;
 use egui::{Button, Color32, Label, RichText, Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 
-use crate::storage::{human_size, EntryKind, StorageEntry, StoragePath};
+use crate::storage::{EntryKind, StorageEntry, StoragePath, human_size};
+
+// ── Sort state ────────────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortColumn {
+    #[default]
+    Name,
+    Size,
+    Modified,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortDir {
+    #[default]
+    Asc,
+    Desc,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct SortState {
+    pub col: SortColumn,
+    pub dir: SortDir,
+}
+
+impl SortState {
+    /// Toggle direction if already on this column; otherwise select it (Asc).
+    fn click(&mut self, col: SortColumn) {
+        if self.col == col {
+            self.dir = match self.dir {
+                SortDir::Asc => SortDir::Desc,
+                SortDir::Desc => SortDir::Asc,
+            };
+        } else {
+            self.col = col;
+            self.dir = SortDir::Asc;
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct FileListResponse {
@@ -45,10 +83,10 @@ fn file_icon(name: &str) -> &'static str {
         "image" => "🖼",
         "audio" => "🎵",
         "video" => "🎬",
-        "text"  => "📝",
+        "text" => "📝",
         _ => match mime.subtype().as_str() {
-            "zip" | "gzip" | "x-tar" | "x-bzip2" | "x-xz"
-            | "x-7z-compressed" | "x-rar-compressed" => "📦",
+            "zip" | "gzip" | "x-tar" | "x-bzip2" | "x-xz" | "x-7z-compressed"
+            | "x-rar-compressed" => "📦",
             "pdf" => "📕",
             _ => "📄",
         },
@@ -59,22 +97,23 @@ pub fn show(
     ui: &mut Ui,
     entries: &[StorageEntry],
     filter: &mut String,
+    sort: &mut SortState,
     selection: &HashSet<StoragePath>,
     loading: bool,
     error: Option<&str>,
     transfer_busy: bool,
 ) -> FileListResponse {
     // ── All output state ──────────────────────────────────────────────────────
-    let upload        = Cell::new(false);
-    let open_dir:     Cell<Option<StoragePath>>  = Cell::new(None);
-    let download:     Cell<Vec<StoragePath>>     = Cell::new(Vec::new());
-    let download_zip: Cell<Vec<StoragePath>>     = Cell::new(Vec::new());
-    let delete:       Cell<Vec<StoragePath>>     = Cell::new(Vec::new());
-    let copy_url:  Cell<Option<StoragePath>>  = Cell::new(None);
-    let presign:   Cell<Option<StoragePath>>  = Cell::new(None);
-    let sel_add:   Cell<Option<StoragePath>>  = Cell::new(None);
-    let sel_remove:Cell<Option<StoragePath>>  = Cell::new(None);
-    let sel_clear  = Cell::new(false);
+    let upload = Cell::new(false);
+    let open_dir: Cell<Option<StoragePath>> = Cell::new(None);
+    let download: Cell<Vec<StoragePath>> = Cell::new(Vec::new());
+    let download_zip: Cell<Vec<StoragePath>> = Cell::new(Vec::new());
+    let delete: Cell<Vec<StoragePath>> = Cell::new(Vec::new());
+    let copy_url: Cell<Option<StoragePath>> = Cell::new(None);
+    let presign: Cell<Option<StoragePath>> = Cell::new(None);
+    let sel_add: Cell<Option<StoragePath>> = Cell::new(None);
+    let sel_remove: Cell<Option<StoragePath>> = Cell::new(None);
+    let sel_clear = Cell::new(false);
 
     // ── Background right-click ────────────────────────────────────────────────
     let bg_resp = ui.interact(ui.max_rect(), ui.id().with("bg_ctx"), Sense::click());
@@ -90,17 +129,18 @@ pub fn show(
         } else {
             Color32::from_rgb(37, 99, 235)
         };
-        let resp = ui.add(
-            Label::new(
-                RichText::new("+ Upload file")
-                    .color(color)
-                    .size(14.0)
-                    .underline(),
+        let resp = ui
+            .add(
+                Label::new(
+                    RichText::new("+ Upload file")
+                        .color(color)
+                        .size(14.0)
+                        .underline(),
+                )
+                .sense(Sense::click()),
             )
-            .sense(Sense::click()),
-        )
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Upload a file to the current location");
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Upload a file to the current location");
         if resp.clicked() && !transfer_busy {
             upload.set(true);
         }
@@ -126,7 +166,9 @@ pub fn show(
                 let n_files = selection
                     .iter()
                     .filter(|p| {
-                        entries.iter().any(|e| &e.path == *p && e.kind == EntryKind::File)
+                        entries
+                            .iter()
+                            .any(|e| &e.path == *p && e.kind == EntryKind::File)
                     })
                     .count();
                 ui.horizontal(|ui| {
@@ -148,17 +190,16 @@ pub fn show(
                         let paths: Vec<_> = selection
                             .iter()
                             .filter(|p| {
-                                entries.iter().any(|e| &e.path == *p && e.kind == EntryKind::File)
+                                entries
+                                    .iter()
+                                    .any(|e| &e.path == *p && e.kind == EntryKind::File)
                             })
                             .cloned()
                             .collect();
                         download.set(paths);
                     }
                     if ui
-                        .add_enabled(
-                            !transfer_busy,
-                            Button::new("⬇ Download as ZIP"),
-                        )
+                        .add_enabled(!transfer_busy, Button::new("⬇ Download as ZIP"))
                         .on_hover_text("Pack all selected items into a single ZIP file")
                         .clicked()
                     {
@@ -175,7 +216,11 @@ pub fn show(
                     {
                         delete.set(selection.iter().cloned().collect());
                     }
-                    if ui.button("✕ Clear").on_hover_text("Clear selection").clicked() {
+                    if ui
+                        .button("✕ Clear")
+                        .on_hover_text("Clear selection")
+                        .clicked()
+                    {
                         sel_clear.set(true);
                     }
                 });
@@ -184,43 +229,99 @@ pub fn show(
             ui.separator();
 
             if loading {
-                ui.centered_and_justified(|ui| { ui.spinner(); });
+                ui.centered_and_justified(|ui| {
+                    ui.spinner();
+                });
                 return;
             }
             if let Some(msg) = error {
-                ui.label(
-                    RichText::new(format!("✗  {msg}"))
-                        .color(Color32::from_rgb(180, 30, 30)),
-                );
+                ui.label(RichText::new(format!("✗  {msg}")).color(Color32::from_rgb(180, 30, 30)));
                 return;
             }
 
             let filter_lc = filter.to_lowercase();
-            let visible: Vec<&StorageEntry> = entries
+            let mut visible: Vec<&StorageEntry> = entries
                 .iter()
-                .filter(|e| {
-                    filter_lc.is_empty() || e.name.to_lowercase().contains(&filter_lc)
-                })
+                .filter(|e| filter_lc.is_empty() || e.name.to_lowercase().contains(&filter_lc))
                 .collect();
 
+            // Sort: directories always first, then by chosen column.
+            visible.sort_by(|a, b| {
+                use std::cmp::Ordering;
+                // Dirs before files
+                let kind_ord = match (&a.kind, &b.kind) {
+                    (EntryKind::Directory, EntryKind::File) => return Ordering::Less,
+                    (EntryKind::File, EntryKind::Directory) => return Ordering::Greater,
+                    _ => Ordering::Equal,
+                };
+                let col_ord = match sort.col {
+                    SortColumn::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                    SortColumn::Size => a.size.cmp(&b.size),
+                    SortColumn::Modified => a.last_modified.cmp(&b.last_modified),
+                };
+                let ord = kind_ord.then(col_ord);
+                if sort.dir == SortDir::Desc {
+                    ord.reverse()
+                } else {
+                    ord
+                }
+            });
+
             let name_col_width = (ui.available_width() - FIXED_WIDTH).max(80.0);
+
+            // Capture sort clicks from headers; applied after the table renders.
+            let mut sort_click: Option<SortColumn> = None;
+
+            // Helper: render a sortable column header label.
+            let header_label = |ui: &mut Ui, label: &str, col: SortColumn, s: &SortState| {
+                let arrow = if s.col == col {
+                    if s.dir == SortDir::Asc {
+                        " ↑"
+                    } else {
+                        " ↓"
+                    }
+                } else {
+                    ""
+                };
+                let text = RichText::new(format!("{label}{arrow}")).strong();
+                ui.add(Label::new(text).sense(Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(if s.col == col && s.dir == SortDir::Asc {
+                        format!("Sort by {label} descending")
+                    } else {
+                        format!("Sort by {label} ascending")
+                    })
+                    .clicked()
+            };
 
             TableBuilder::new(ui)
                 .striped(true)
                 .resizable(true)
                 .auto_shrink(false)
-                .column(Column::exact(24.0))                     // checkbox
-                .column(Column::exact(28.0))                     // icon
-                .column(Column::remainder().clip(false))         // name
-                .column(Column::initial(80.0).resizable(true))   // size
-                .column(Column::initial(130.0).resizable(true))  // modified
-                .column(Column::exact(28.0))                     // copy
-                .header(20.0, |mut h| {
+                .column(Column::exact(24.0)) // checkbox
+                .column(Column::exact(28.0)) // icon
+                .column(Column::remainder().clip(false)) // name
+                .column(Column::initial(80.0).resizable(true)) // size
+                .column(Column::initial(130.0).resizable(true)) // modified
+                .column(Column::exact(28.0)) // copy
+                .header(22.0, |mut h| {
                     h.col(|_| {});
                     h.col(|_| {});
-                    h.col(|ui| { ui.label(RichText::new("Name").strong()); });
-                    h.col(|ui| { ui.label(RichText::new("Size").strong()); });
-                    h.col(|ui| { ui.label(RichText::new("Modified").strong()); });
+                    h.col(|ui| {
+                        if header_label(ui, "Name", SortColumn::Name, sort) {
+                            sort_click = Some(SortColumn::Name);
+                        }
+                    });
+                    h.col(|ui| {
+                        if header_label(ui, "Size", SortColumn::Size, sort) {
+                            sort_click = Some(SortColumn::Size);
+                        }
+                    });
+                    h.col(|ui| {
+                        if header_label(ui, "Modified", SortColumn::Modified, sort) {
+                            sort_click = Some(SortColumn::Modified);
+                        }
+                    });
                     h.col(|_| {});
                 })
                 .body(|body| {
@@ -245,10 +346,13 @@ pub fn show(
                         // ── icon ──────────────────────────────────────────────
                         row.col(|ui| {
                             ui.add_space(ROW_V_PAD);
-                            ui.label(RichText::new(match &entry.kind {
-                                EntryKind::Directory => "📁",
-                                EntryKind::File      => file_icon(&entry.name),
-                            }).size(18.0));
+                            ui.label(
+                                RichText::new(match &entry.kind {
+                                    EntryKind::Directory => "📁",
+                                    EntryKind::File => file_icon(&entry.name),
+                                })
+                                .size(18.0),
+                            );
                         });
 
                         // ── name ──────────────────────────────────────────────
@@ -273,7 +377,7 @@ pub fn show(
                             if resp.clicked() {
                                 match entry.kind {
                                     EntryKind::Directory => open_dir.set(Some(entry.path.clone())),
-                                    EntryKind::File      => download.set(vec![entry.path.clone()]),
+                                    EntryKind::File => download.set(vec![entry.path.clone()]),
                                 }
                             }
 
@@ -291,7 +395,9 @@ pub fn show(
                                     "🗑 Delete".to_owned()
                                 };
                                 if ui
-                                    .add(Button::new(del_label).fill(Color32::from_rgb(180, 40, 40)))
+                                    .add(
+                                        Button::new(del_label).fill(Color32::from_rgb(180, 40, 40)),
+                                    )
                                     .clicked()
                                 {
                                     let paths = if is_selected && selection.len() > 1 {
@@ -365,20 +471,24 @@ pub fn show(
                         });
                     });
                 });
+            // Apply any column header click after the table is rendered.
+            if let Some(col) = sort_click {
+                sort.click(col);
+            }
         });
     });
 
     FileListResponse {
-        open_dir:     open_dir.into_inner(),
-        download:     download.into_inner(),
+        open_dir: open_dir.into_inner(),
+        download: download.into_inner(),
         download_zip: download_zip.into_inner(),
-        delete:       delete.into_inner(),
-        upload:     upload.get(),
-        copy_url:   copy_url.into_inner(),
-        presign:    presign.into_inner(),
-        sel_add:    sel_add.into_inner(),
+        delete: delete.into_inner(),
+        upload: upload.get(),
+        copy_url: copy_url.into_inner(),
+        presign: presign.into_inner(),
+        sel_add: sel_add.into_inner(),
         sel_remove: sel_remove.into_inner(),
-        sel_clear:  sel_clear.get(),
+        sel_clear: sel_clear.get(),
     }
 }
 
