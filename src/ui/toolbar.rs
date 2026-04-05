@@ -30,7 +30,8 @@ pub fn show(
             .add_enabled(can_forward, Button::new(RichText::new("▶").size(16.0)))
             .clicked();
         resp.go_up = ui
-            .add_enabled(can_up, Button::new(RichText::new("▲").size(16.0)))
+            .add_enabled(can_up, Button::new(RichText::new("⬆").size(16.0)))
+            .on_hover_text("Go to parent directory")
             .clicked();
         resp.refresh = ui.button(RichText::new("⟳").size(18.0)).clicked();
 
