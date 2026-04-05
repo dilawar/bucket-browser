@@ -299,9 +299,9 @@ pub fn show(
                                 }
                                 if entry.kind == EntryKind::File
                                     && ui
-                                        .button("🔑  Copy signed URL (24 h)")
+                                        .button("🔑  Copy presigned URL (24 h)")
                                         .on_hover_text(
-                                            "Generate a pre-signed URL valid for 24 hours",
+                                            "Generate a presigned URL valid for 24 hours",
                                         )
                                         .clicked()
                                 {

@@ -197,7 +197,7 @@ impl S3Explorer {
             ctx.clone(),
             &self.rt,
         ));
-        self.transfer_msg = Some("Generating signed URL…".to_owned());
+        self.transfer_msg = Some("Generating presigned URL…".to_owned());
     }
 
     fn poll_presign(&mut self, ctx: &egui::Context) {
@@ -208,7 +208,7 @@ impl S3Explorer {
             match result {
                 Ok(url) => {
                     ctx.copy_text(url);
-                    self.transfer_msg = Some("✓ Signed URL copied to clipboard".to_owned());
+                    self.transfer_msg = Some("✓ Presigned URL copied to clipboard".to_owned());
                 }
                 Err(e) => {
                     self.transfer_msg = Some(format!("Error: {e}"));
