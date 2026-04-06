@@ -54,6 +54,20 @@ pub trait Backend: Send + Sync + 'static {
         anyhow::bail!("presigned URLs are not supported by this storage backend")
     }
 
+    /// Create a virtual directory. Default: put a zero-byte `.keep` placeholder.
+    async fn create_dir(&self, path: &StoragePath) -> Result<()> {
+        self.put(&path.child_file(".keep"), bytes::Bytes::new()).await
+    }
+
+    /// Rename a file: copy to new path then delete original.
+    /// Only for files; directory rename is not supported.
+    async fn rename(&self, from: &StoragePath, to: &StoragePath) -> Result<()> {
+        let data = self.get(from).await?;
+        self.put(to, data).await?;
+        self.delete(from).await?;
+        Ok(())
+    }
+
     /// Short human-readable name shown in the status bar.
     fn name(&self) -> &str;
 }

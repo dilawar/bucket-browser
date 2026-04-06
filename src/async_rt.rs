@@ -76,7 +76,29 @@ impl TransferHandle {
 
     /// Current filename/operation being processed, or empty string if unknown.
     pub fn progress_msg(&self) -> String {
-        self.progress.lock().unwrap().clone()
+        let msg = self.progress.lock().unwrap().clone();
+        if let Some(space) = msg.find(' ')
+            && msg[..space].contains('/')
+        {
+            return msg[space + 1..].to_owned();
+        }
+        msg
+    }
+
+    /// For folder uploads, returns (fraction 0.0–1.0, current filename).
+    /// Returns None for single-file uploads or when total is unknown.
+    pub fn upload_progress(&self) -> Option<(f32, String)> {
+        let msg = self.progress.lock().unwrap().clone();
+        let space = msg.find(' ')?;
+        let (counts, rest) = msg.split_at(space);
+        let (done, total) = counts.split_once('/')?;
+        let done: f32 = done.parse().ok()?;
+        let total: f32 = total.parse().ok()?;
+        if total > 0.0 {
+            Some((done / total, rest.trim_start().to_owned()))
+        } else {
+            None
+        }
     }
 
     /// Abort the underlying task immediately.

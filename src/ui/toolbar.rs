@@ -1,4 +1,4 @@
-use egui::{Button, Key, RichText, TextEdit, Ui};
+use egui::{Button, Color32, Key, Label, RichText, Sense, TextEdit, Ui};
 
 use crate::storage::StoragePath;
 
@@ -9,6 +9,8 @@ pub struct ToolbarState<'a> {
     pub can_forward: bool,
     pub can_up: bool,
     pub dark_mode: bool,
+    pub current_path: &'a StoragePath,
+    pub editing_path: bool,
 }
 
 /// Actions the toolbar produced this frame.
@@ -20,6 +22,8 @@ pub struct ToolbarResponse {
     pub go_up: bool,
     pub refresh: bool,
     pub toggle_theme: bool,
+    /// Some(true) = enter path-edit mode; Some(false) = leave it.
+    pub set_editing: Option<bool>,
 }
 
 pub fn show(ui: &mut Ui, state: ToolbarState<'_>) -> ToolbarResponse {
@@ -29,41 +33,36 @@ pub fn show(ui: &mut Ui, state: ToolbarState<'_>) -> ToolbarResponse {
         can_forward,
         can_up,
         dark_mode,
+        current_path,
+        editing_path,
     } = state;
     let mut resp = ToolbarResponse::default();
 
     ui.horizontal(|ui| {
         resp.go_back = ui
             .add_enabled(can_back, Button::new(RichText::new("◀").size(16.0)))
+            .on_hover_text("Go back")
             .clicked();
         resp.go_forward = ui
             .add_enabled(can_forward, Button::new(RichText::new("▶").size(16.0)))
+            .on_hover_text("Go forward")
             .clicked();
         resp.go_up = ui
             .add_enabled(can_up, Button::new(RichText::new("⬆").size(16.0)))
             .on_hover_text("Go to parent directory")
             .clicked();
-        resp.refresh = ui.button(RichText::new("⟳").size(18.0)).clicked();
+        resp.refresh = ui
+            .button(RichText::new("⟳").size(18.0))
+            .on_hover_text("Refresh")
+            .clicked();
 
         ui.separator();
 
-        let path_response = ui.add(
-            TextEdit::singleline(path_input)
-                .desired_width(f32::INFINITY)
-                .hint_text("Path or s3://bucket/prefix …"),
-        );
-
-        if path_response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-            resp.navigate_to = Some(StoragePath::parse(path_input));
-        }
-
+        // Theme button on the far right — add it first in a right_to_left sub-layout
+        // so the middle section can take the remaining space.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let icon = if dark_mode { "☀️" } else { "🌙" };
-            let tooltip = if dark_mode {
-                "Switch to light theme"
-            } else {
-                "Switch to dark theme"
-            };
+            let icon = if dark_mode { "☀" } else { "☽" };
+            let tooltip = if dark_mode { "Switch to light theme" } else { "Switch to dark theme" };
             if ui
                 .button(RichText::new(icon).size(18.0))
                 .on_hover_text(tooltip)
@@ -71,6 +70,59 @@ pub fn show(ui: &mut Ui, state: ToolbarState<'_>) -> ToolbarResponse {
             {
                 resp.toggle_theme = true;
             }
+
+            ui.separator();
+
+            // Middle section: breadcrumbs or text input
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                if editing_path {
+                    let text_resp = ui.add(
+                        TextEdit::singleline(path_input)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("Path or s3://bucket/prefix …"),
+                    );
+                    if !text_resp.has_focus() {
+                        text_resp.request_focus();
+                    }
+                    if text_resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                        resp.navigate_to = Some(StoragePath::parse(path_input));
+                        resp.set_editing = Some(false);
+                    }
+                    if ui.input(|i| i.key_pressed(Key::Escape)) {
+                        resp.set_editing = Some(false);
+                    }
+                } else {
+                    // Breadcrumbs
+                    let crumbs = current_path.breadcrumbs();
+                    let muted = Color32::from_gray(130);
+                    for (i, (label, path)) in crumbs.iter().enumerate() {
+                        if i > 0 {
+                            ui.label(RichText::new("›").color(muted));
+                        }
+                        let link = ui.add(
+                            Label::new(RichText::new(label).strong())
+                                .sense(Sense::click()),
+                        );
+                        if link.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if link.clicked() {
+                            resp.navigate_to = Some(path.clone());
+                            resp.set_editing = Some(false);
+                        }
+                    }
+                    // Edit button
+                    if ui
+                        .add(Label::new(RichText::new("✎").color(muted)).sense(Sense::click()))
+                        .on_hover_text("Edit path manually")
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        *path_input = current_path.to_string();
+                        resp.set_editing = Some(true);
+                    }
+                }
+            });
         });
     });
 

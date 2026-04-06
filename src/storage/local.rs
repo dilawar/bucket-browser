@@ -46,6 +46,14 @@ impl Backend for LocalBackend {
         Ok(())
     }
 
+    async fn create_dir(&self, path: &StoragePath) -> Result<()> {
+        let StoragePath::Local(p) = path else {
+            bail!("LocalBackend cannot handle {path:?}");
+        };
+        tokio::fs::create_dir_all(p).await?;
+        Ok(())
+    }
+
     fn public_url(&self, path: &StoragePath) -> Option<String> {
         let StoragePath::Local(p) = path else {
             return None;

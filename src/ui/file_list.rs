@@ -55,6 +55,8 @@ pub struct FileListResponse {
     pub delete: Vec<StoragePath>,
     pub upload: bool,
     pub upload_folder: bool,
+    pub new_folder: bool,
+    pub rename: Option<StoragePath>,
     /// Path whose public URL should be copied to clipboard (sync, no network).
     pub copy_url: Option<StoragePath>,
     /// Path for which a 24-hour presigned URL should be generated and copied.
@@ -118,6 +120,8 @@ pub fn show(ui: &mut Ui, state: FileListState<'_>) -> FileListResponse {
     // ── All output state ──────────────────────────────────────────────────────
     let upload = Cell::new(false);
     let upload_folder = Cell::new(false);
+    let new_folder = Cell::new(false);
+    let rename: Cell<Option<StoragePath>> = Cell::new(None);
     let open_dir: Cell<Option<StoragePath>> = Cell::new(None);
     let download: Cell<Vec<StoragePath>> = Cell::new(Vec::new());
     let download_zip: Cell<Vec<StoragePath>> = Cell::new(Vec::new());
@@ -132,6 +136,10 @@ pub fn show(ui: &mut Ui, state: FileListState<'_>) -> FileListResponse {
     let bg_resp = ui.interact(ui.max_rect(), ui.id().with("bg_ctx"), Sense::click());
     bg_resp.context_menu(|ui| {
         upload_item(ui, transfer_busy, &upload);
+        if ui.button("📁  New folder").clicked() && !transfer_busy {
+            new_folder.set(true);
+            ui.close_menu();
+        }
     });
 
     // ── Layout: upload links pinned to bottom ────────────────────────────────
@@ -173,6 +181,22 @@ pub fn show(ui: &mut Ui, state: FileListState<'_>) -> FileListResponse {
                 .on_hover_text("Upload all files inside a folder to the current location");
             if folder_resp.clicked() && !transfer_busy {
                 upload_folder.set(true);
+            }
+            ui.label(RichText::new("·").color(Color32::from_gray(180)).size(14.0));
+            let nf_resp = ui
+                .add(
+                    Label::new(
+                        RichText::new("+ New folder")
+                            .color(link_color)
+                            .size(14.0)
+                            .underline(),
+                    )
+                    .sense(Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Create a new folder in the current location");
+            if nf_resp.clicked() && !transfer_busy {
+                new_folder.set(true);
             }
         });
         ui.add_space(4.0);
@@ -444,6 +468,12 @@ pub fn show(ui: &mut Ui, state: FileListState<'_>) -> FileListResponse {
                                     delete.set(paths);
                                     ui.close_menu();
                                 }
+                                if entry.kind == EntryKind::File
+                                    && ui.button("✎  Rename").clicked()
+                                {
+                                    rename.set(Some(entry.path.clone()));
+                                    ui.close_menu();
+                                }
                                 ui.separator();
                                 if ui
                                     .button("⎘  Copy URL")
@@ -521,6 +551,8 @@ pub fn show(ui: &mut Ui, state: FileListState<'_>) -> FileListResponse {
         delete: delete.into_inner(),
         upload: upload.get(),
         upload_folder: upload_folder.get(),
+        new_folder: new_folder.get(),
+        rename: rename.into_inner(),
         copy_url: copy_url.into_inner(),
         presign: presign.into_inner(),
         sel_add: sel_add.into_inner(),

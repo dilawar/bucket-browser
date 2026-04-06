@@ -10,6 +10,25 @@ use crate::upload;
 use crate::storage::{Backend, S3Config, StorageEntry, StoragePath};
 use crate::ui::{config, file_list, file_list::SortState, sidebar, toolbar};
 
+// ── Transfer status ───────────────────────────────────────────────────────────
+
+#[derive(Default)]
+enum TransferStatus {
+    #[default]
+    Idle,
+    /// In-progress message (e.g. "Generating presigned URL…").
+    Pending(String),
+    Success(String),
+    Error(String),
+}
+
+// ── Rename state ──────────────────────────────────────────────────────────────
+
+struct RenameState {
+    path: StoragePath,
+    new_name: String,
+}
+
 // ── App mode ──────────────────────────────────────────────────────────────────
 
 enum Mode {
@@ -39,7 +58,10 @@ pub struct S3Explorer {
     dark_mode: bool,
     needs_initial_load: bool,
     transfer: Option<TransferHandle>,
-    transfer_msg: Option<String>,
+    transfer_status: TransferStatus,
+    editing_path: bool,
+    new_folder_name: Option<String>,
+    rename_state: Option<RenameState>,
     /// Separate handle for presign tasks so they don't block uploads/downloads.
     presign: Option<TransferHandle>,
     /// Pending ZIP download that is awaiting user confirmation (large archive).
@@ -75,7 +97,10 @@ impl S3Explorer {
             dark_mode: false,
             needs_initial_load: true,
             transfer: None,
-            transfer_msg: None,
+            transfer_status: TransferStatus::Idle,
+            editing_path: false,
+            new_folder_name: None,
+            rename_state: None,
             presign: None,
             zip_confirm: None,
             rt,
@@ -104,7 +129,10 @@ impl S3Explorer {
             dark_mode: false,
             needs_initial_load: false,
             transfer: None,
-            transfer_msg: None,
+            transfer_status: TransferStatus::Idle,
+            editing_path: false,
+            new_folder_name: None,
+            rename_state: None,
             presign: None,
             zip_confirm: None,
             rt,
@@ -140,13 +168,13 @@ impl S3Explorer {
 
     fn start_download(&mut self, paths: Vec<StoragePath>, ctx: &egui::Context) {
         if self.backend.is_none() { return }
-        self.transfer_msg = None;
+        self.transfer_status = TransferStatus::Idle;
         self.transfer = Some(download::spawn_download(self.spawn_ctx(ctx), paths));
     }
 
     fn start_delete(&mut self, paths: Vec<StoragePath>, ctx: &egui::Context) {
         if self.backend.is_none() { return }
-        self.transfer_msg = None;
+        self.transfer_status = TransferStatus::Idle;
         for p in &paths {
             self.selection.remove(p);
         }
@@ -155,7 +183,7 @@ impl S3Explorer {
 
     fn start_upload(&mut self, ctx: &egui::Context) {
         if self.backend.is_none() { return }
-        self.transfer_msg = None;
+        self.transfer_status = TransferStatus::Idle;
         self.transfer = Some(upload::spawn_upload(
             self.spawn_ctx(ctx),
             self.current_path.clone(),
@@ -164,7 +192,7 @@ impl S3Explorer {
 
     fn start_upload_folder(&mut self, ctx: &egui::Context) {
         if self.backend.is_none() { return }
-        self.transfer_msg = None;
+        self.transfer_status = TransferStatus::Idle;
         self.transfer = Some(upload::spawn_upload_folder(
             self.spawn_ctx(ctx),
             self.current_path.clone(),
@@ -179,13 +207,12 @@ impl S3Explorer {
             match result {
                 Ok(msg) => {
                     info!("{msg}");
-                    self.transfer_msg = Some(msg);
-                    // Refresh the listing so newly uploaded files appear.
+                    self.transfer_status = TransferStatus::Success(msg);
                     let path = self.current_path.clone();
                     self.request_listing(path, ctx);
                 }
                 Err(e) => {
-                    self.transfer_msg = Some(format!("Error: {e}"));
+                    self.transfer_status = TransferStatus::Error(e.to_string());
                 }
             }
         }
@@ -204,12 +231,36 @@ impl S3Explorer {
         }
     }
 
+    // ── create dir / rename ───────────────────────────────────────────────────
+
+    fn start_create_dir(&mut self, name: String, ctx: &egui::Context) {
+        if self.backend.is_none() { return }
+        let path = self.current_path.child(&name);
+        let sc = self.spawn_ctx(ctx);
+        self.transfer_status = TransferStatus::Idle;
+        self.transfer = Some(async_rt::spawn_transfer(sc, move |backend| async move {
+            backend.create_dir(&path).await?;
+            Ok(format!("Created folder '{name}'"))
+        }));
+    }
+
+    fn start_rename(&mut self, from: StoragePath, new_name: String, ctx: &egui::Context) {
+        if self.backend.is_none() { return }
+        let parent = from.parent().unwrap_or_else(|| self.current_path.clone());
+        let to = parent.child_file(&new_name);
+        let sc = self.spawn_ctx(ctx);
+        self.transfer = Some(async_rt::spawn_transfer(sc, move |backend| async move {
+            backend.rename(&from, &to).await?;
+            Ok(format!("Renamed to '{new_name}'"))
+        }));
+    }
+
     // ── ZIP download with size pre-flight ─────────────────────────────────────
 
     fn start_zip_download(&mut self, paths: Vec<StoragePath>, ctx: &egui::Context) {
         if self.backend.is_none() { return }
         let current = self.current_path.clone();
-        self.transfer_msg = None;
+        self.transfer_status = TransferStatus::Idle;
         self.transfer = Some(download::spawn_download_zip(
             self.spawn_ctx(ctx),
             paths,
@@ -217,33 +268,13 @@ impl S3Explorer {
         ));
     }
 
-    /// Estimate the total download size; if it exceeds the threshold, store a
-    /// confirmation request instead of starting the download immediately.
     fn request_zip_download(&mut self, paths: Vec<StoragePath>, ctx: &egui::Context) {
         if self.backend.is_none() { return }
-        let sc = self.spawn_ctx(ctx);
-        let paths_clone = paths.clone();
         let current = self.current_path.clone();
 
-        // Run size estimation in background; result lands on next frame.
-        let slot = std::sync::Arc::new(std::sync::Mutex::new(None::<Option<u64>>));
-        let slot2 = std::sync::Arc::clone(&slot);
-        sc.rt.spawn(async move {
-            let size = download::estimate_size(sc.backend, &paths_clone)
-                .await
-                .ok()
-                .flatten();
-            *slot2.lock().unwrap() = Some(size);
-            sc.ctx.request_repaint();
-        });
-
-        // Immediately kick off if we can't estimate (unknown sizes); otherwise
-        // we wait one frame for the result and show confirmation if needed.
-        // For simplicity: if any selected item is a plain file (size in entries),
-        // compute inline from the entries list to avoid the extra round-trip.
         let known_total: Option<u64> = paths.iter().try_fold(0u64, |acc, p| {
             if p.is_dir() {
-                None // directory size unknown without listing
+                None
             } else {
                 self.entries
                     .iter()
@@ -253,21 +284,13 @@ impl S3Explorer {
             }
         });
 
-        if let Some(total) = known_total {
-            if total > download::ZIP_WARN_BYTES {
-                self.zip_confirm = Some(ZipConfirm {
-                    paths,
-                    current_path: current,
-                    size_bytes: total,
-                });
-            } else {
-                self.start_zip_download(paths, ctx);
-            }
-        } else {
-            // Can't determine size without a recursive list — just start.
-            // The background task above is effectively unused in this path.
-            self.start_zip_download(paths, ctx);
+        if let Some(total) = known_total
+            && total > download::ZIP_WARN_BYTES
+        {
+            self.zip_confirm = Some(ZipConfirm { paths, current_path: current, size_bytes: total });
+            return;
         }
+        self.start_zip_download(paths, ctx);
     }
 
     // ── presign ───────────────────────────────────────────────────────────────
@@ -275,7 +298,7 @@ impl S3Explorer {
     fn start_presign(&mut self, path: StoragePath, ctx: &egui::Context) {
         if self.backend.is_none() { return }
         self.presign = Some(async_rt::spawn_presign(self.spawn_ctx(ctx), path));
-        self.transfer_msg = Some("Generating presigned URL…".to_owned());
+        self.transfer_status = TransferStatus::Pending("Generating presigned URL…".to_owned());
     }
 
     fn poll_presign(&mut self, ctx: &egui::Context) {
@@ -286,10 +309,10 @@ impl S3Explorer {
             match result {
                 Ok(url) => {
                     ctx.copy_text(url);
-                    self.transfer_msg = Some("✓ Presigned URL copied to clipboard".to_owned());
+                    self.transfer_status = TransferStatus::Success("Presigned URL copied to clipboard".to_owned());
                 }
                 Err(e) => {
-                    self.transfer_msg = Some(format!("Error: {e}"));
+                    self.transfer_status = TransferStatus::Error(e.to_string());
                 }
             }
         }
@@ -407,6 +430,111 @@ impl S3Explorer {
         });
     }
 
+    fn show_zip_confirm_modal(&mut self, ctx: &egui::Context) {
+        if self.zip_confirm.is_none() { return }
+        let mut confirmed = false;
+        let mut cancelled = false;
+        egui::Modal::new(egui::Id::new("zip_confirm")).show(ctx, |ui| {
+            ui.set_max_width(360.0);
+            let size_mb = self.zip_confirm.as_ref().unwrap().size_bytes as f64 / 1_048_576.0;
+            ui.heading("Large download");
+            ui.add_space(8.0);
+            ui.label(format!(
+                "The selected items total {size_mb:.0} MB.\n\
+                 Downloading a large archive may take a while and use significant memory.\n\n\
+                 Continue anyway?"
+            ));
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui.button(egui::RichText::new("Download").strong()).clicked() {
+                    confirmed = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancelled = true;
+                }
+            });
+        });
+        if confirmed {
+            let ZipConfirm { paths, current_path, .. } = self.zip_confirm.take().unwrap();
+            self.transfer_status = TransferStatus::Idle;
+            self.transfer = Some(download::spawn_download_zip(self.spawn_ctx(ctx), paths, current_path));
+        } else if cancelled {
+            self.zip_confirm = None;
+        }
+    }
+
+    fn show_new_folder_modal(&mut self, ctx: &egui::Context) {
+        if self.new_folder_name.is_none() { return }
+        let mut confirmed = false;
+        let mut cancelled = false;
+        egui::Modal::new(egui::Id::new("new_folder")).show(ctx, |ui| {
+            ui.set_max_width(320.0);
+            ui.heading("New folder");
+            ui.add_space(8.0);
+            let name = self.new_folder_name.as_mut().unwrap();
+            let resp = ui.add(
+                egui::TextEdit::singleline(name)
+                    .hint_text("Folder name…")
+                    .desired_width(f32::INFINITY),
+            );
+            if !resp.has_focus() { resp.request_focus(); }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let can_create = !name.is_empty() && !name.contains('/');
+                if ui.add_enabled(can_create, egui::Button::new(egui::RichText::new("Create").strong())).clicked()
+                    || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && can_create)
+                {
+                    confirmed = true;
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    cancelled = true;
+                }
+            });
+        });
+        if confirmed {
+            let name = self.new_folder_name.take().unwrap();
+            self.start_create_dir(name, ctx);
+        } else if cancelled {
+            self.new_folder_name = None;
+        }
+    }
+
+    fn show_rename_modal(&mut self, ctx: &egui::Context) {
+        if self.rename_state.is_none() { return }
+        let mut confirmed = false;
+        let mut cancelled = false;
+        egui::Modal::new(egui::Id::new("rename")).show(ctx, |ui| {
+            ui.set_max_width(320.0);
+            ui.heading("Rename");
+            ui.add_space(8.0);
+            let state = self.rename_state.as_mut().unwrap();
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut state.new_name)
+                    .hint_text("New name…")
+                    .desired_width(f32::INFINITY),
+            );
+            if !resp.has_focus() { resp.request_focus(); }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let can_rename = !state.new_name.is_empty() && !state.new_name.contains('/');
+                if ui.add_enabled(can_rename, egui::Button::new(egui::RichText::new("Rename").strong())).clicked()
+                    || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && can_rename)
+                {
+                    confirmed = true;
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    cancelled = true;
+                }
+            });
+        });
+        if confirmed {
+            let RenameState { path, new_name } = self.rename_state.take().unwrap();
+            self.start_rename(path, new_name, ctx);
+        } else if cancelled {
+            self.rename_state = None;
+        }
+    }
+
     fn draw_browser(&mut self, ctx: &egui::Context) {
         if self.needs_initial_load {
             self.needs_initial_load = false;
@@ -418,54 +546,36 @@ impl S3Explorer {
         self.poll_presign(ctx);
         self.poll_transfer(ctx);
 
-        // ── Large-ZIP confirmation modal ──────────────────────────────────────
-        if self.zip_confirm.is_some() {
-            let mut confirmed = false;
-            let mut cancelled = false;
-            egui::Modal::new(egui::Id::new("zip_confirm")).show(ctx, |ui| {
-                ui.set_max_width(360.0);
-                let size_mb = self.zip_confirm.as_ref().unwrap().size_bytes as f64 / 1_048_576.0;
-                ui.heading("Large download");
-                ui.add_space(8.0);
-                ui.label(format!(
-                    "The selected items total {size_mb:.0} MB.\n\
-                     Downloading a large archive may take a while and use significant memory.\n\n\
-                     Continue anyway?"
-                ));
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    if ui
-                        .button(egui::RichText::new("Download").strong())
-                        .clicked()
-                    {
-                        confirmed = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        cancelled = true;
-                    }
-                });
-            });
-            if confirmed {
-                let ZipConfirm {
-                    paths,
-                    current_path,
-                    ..
-                } = self.zip_confirm.take().unwrap();
-                self.transfer_msg = None;
-                self.transfer = Some(download::spawn_download_zip(
-                    self.spawn_ctx(ctx),
-                    paths,
-                    current_path,
-                ));
-            } else if cancelled {
-                self.zip_confirm = None;
-            }
-        }
+        // Modals (shown over everything else)
+        self.show_zip_confirm_modal(ctx);
+        self.show_new_folder_modal(ctx);
+        self.show_rename_modal(ctx);
 
         let can_back = self.history_pos > 0;
         let can_forward = self.history_pos + 1 < self.history.len();
         let can_up = self.current_path.parent().is_some();
         let busy = self.transfer_busy();
+
+        // Keyboard shortcuts
+        let typing = ctx.memory(|m| m.focused().is_some());
+        if !typing {
+            let delete_pressed = ctx.input(|i| i.key_pressed(egui::Key::Delete));
+            let f5_pressed = ctx.input(|i| i.key_pressed(egui::Key::F5));
+            let backspace_pressed = ctx.input(|i| i.key_pressed(egui::Key::Backspace));
+            if f5_pressed {
+                let p = self.current_path.clone();
+                self.request_listing(p, ctx);
+            }
+            if backspace_pressed && can_up && !busy {
+                self.go_up(ctx);
+            }
+            if delete_pressed && !self.selection.is_empty() && !busy {
+                let paths: Vec<_> = self.selection.iter().cloned().collect();
+                self.start_delete(paths, ctx);
+            }
+        }
+
+        let mut cancel_clicked = false;
 
         TopBottomPanel::top("toolbar").show(ctx, |ui| {
             let resp = toolbar::show(
@@ -476,107 +586,98 @@ impl S3Explorer {
                     can_forward,
                     can_up,
                     dark_mode: self.dark_mode,
+                    current_path: &self.current_path,
+                    editing_path: self.editing_path,
                 },
             );
+            if let Some(editing) = resp.set_editing {
+                self.editing_path = editing;
+            }
             if resp.toggle_theme {
                 self.dark_mode = !self.dark_mode;
-                let visuals = if self.dark_mode {
-                    egui::Visuals::dark()
-                } else {
-                    egui::Visuals::light()
-                };
-                ctx.set_visuals(visuals);
+                ctx.set_visuals(if self.dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() });
             }
-            if resp.go_back {
-                self.go_back(ctx);
-            }
-            if resp.go_forward {
-                self.go_forward(ctx);
-            }
-            if resp.go_up {
-                self.go_up(ctx);
-            }
+            if resp.go_back { self.go_back(ctx); }
+            if resp.go_forward { self.go_forward(ctx); }
+            if resp.go_up { self.go_up(ctx); }
             if resp.refresh {
                 let p = self.current_path.clone();
                 self.request_listing(p, ctx);
             }
             if let Some(p) = resp.navigate_to {
+                self.editing_path = false;
                 self.navigate_to(p, ctx);
             }
         });
 
-        let mut cancel_clicked = false;
         TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let backend_name = self.backend.as_ref().map_or("—", |b| b.name());
                 let n = self.entries.len();
-                // Dark enough for WCAG AA on both light and dark backgrounds.
                 let muted = Color32::from_gray(90);
                 ui.label(
-                    RichText::new(format!(
-                        "{backend_name}  ·  {n} item{}",
-                        if n == 1 { "" } else { "s" }
-                    ))
-                    .size(13.0)
-                    .color(muted),
+                    RichText::new(format!("{backend_name}  ·  {n} item{}", if n == 1 { "" } else { "s" }))
+                        .size(13.0)
+                        .color(muted),
                 );
 
                 if busy {
                     ui.separator();
                     ui.spinner();
-                    let progress = self
-                        .transfer
-                        .as_ref()
-                        .map(|h| h.progress_msg())
-                        .filter(|s| !s.is_empty());
-                    let label = match &progress {
-                        Some(name) => format!("Uploading  {name}"),
-                        None => "Working…".to_owned(),
-                    };
-                    ui.label(RichText::new(label).size(13.0).color(muted));
-                    // Float cancel button to the far right.
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        RichText::new("Cancel upload")
-                                            .size(13.0)
-                                            .color(Color32::WHITE),
-                                    )
-                                    .fill(Color32::from_rgb(180, 40, 40)),
-                                )
-                                .on_hover_text("Abort the current upload")
-                                .clicked()
-                            {
-                                cancel_clicked = true;
-                            }
-                        },
-                    );
-                } else if let Some(msg) = &self.transfer_msg {
-                    ui.separator();
-                    // Use icon prefix so status is never conveyed by colour alone.
-                    let (prefix, color) = if msg.starts_with("Error") {
-                        ("✗ ", Color32::from_rgb(180, 30, 30))
+
+                    // Check for folder upload progress
+                    let upload_progress = self.transfer.as_ref().and_then(|h| h.upload_progress());
+                    if let Some((fraction, filename)) = upload_progress {
+                        ui.label(RichText::new(format!("Uploading  {filename}")).size(13.0).color(muted));
+                        ui.add(egui::ProgressBar::new(fraction).desired_width(120.0));
                     } else {
-                        ("✓ ", Color32::from_rgb(20, 120, 60))
-                    };
-                    ui.label(
-                        RichText::new(format!("{prefix}{msg}"))
-                            .size(13.0)
-                            .color(color),
-                    );
+                        let progress = self.transfer.as_ref()
+                            .map(|h| h.progress_msg())
+                            .filter(|s| !s.is_empty());
+                        let label = match &progress {
+                            Some(name) => format!("Uploading  {name}"),
+                            None => "Working…".to_owned(),
+                        };
+                        ui.label(RichText::new(label).size(13.0).color(muted));
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new("Cancel upload").size(13.0).color(Color32::WHITE))
+                                    .fill(Color32::from_rgb(180, 40, 40)),
+                            )
+                            .on_hover_text("Abort the current upload")
+                            .clicked()
+                        {
+                            cancel_clicked = true;
+                        }
+                    });
+                } else {
+                    match &self.transfer_status {
+                        TransferStatus::Idle => {}
+                        TransferStatus::Pending(msg) => {
+                            ui.separator();
+                            ui.spinner();
+                            ui.label(RichText::new(msg.as_str()).size(13.0).color(muted));
+                        }
+                        TransferStatus::Success(msg) => {
+                            ui.separator();
+                            ui.label(RichText::new(format!("✓ {msg}")).size(13.0).color(Color32::from_rgb(20, 120, 60)));
+                        }
+                        TransferStatus::Error(msg) => {
+                            ui.separator();
+                            ui.label(RichText::new(format!("✗ {msg}")).size(13.0).color(Color32::from_rgb(180, 30, 30)));
+                        }
+                    }
                 }
             });
         });
 
         if cancel_clicked {
-            if let Some(handle) = &self.transfer {
-                handle.cancel();
-            }
+            if let Some(handle) = &self.transfer { handle.cancel(); }
             self.transfer = None;
-            self.transfer_msg = Some("Upload cancelled.".to_owned());
+            self.transfer_status = TransferStatus::Error("Upload cancelled.".to_owned());
         }
 
         let max_sidebar = ctx.screen_rect().width() / 2.0;
@@ -604,46 +705,25 @@ impl S3Explorer {
                     transfer_busy: busy,
                 },
             );
-            if let Some(dir) = resp.open_dir {
-                self.navigate_to(dir, ctx);
-            }
-            if let Some(p) = resp.sel_add {
-                self.selection.insert(p);
-            }
-            if let Some(p) = resp.sel_remove {
-                self.selection.remove(&p);
-            }
-            if resp.sel_clear {
-                self.selection.clear();
-            }
+            if let Some(dir) = resp.open_dir { self.navigate_to(dir, ctx); }
+            if let Some(p) = resp.sel_add { self.selection.insert(p); }
+            if let Some(p) = resp.sel_remove { self.selection.remove(&p); }
+            if resp.sel_clear { self.selection.clear(); }
             if let Some(path) = resp.copy_url {
-                // Synchronous — build the URL from stored fields, no network needed.
-                let url = self
-                    .backend
-                    .as_ref()
+                let url = self.backend.as_ref()
                     .and_then(|b| b.public_url(&path))
                     .unwrap_or_else(|| path.to_string());
                 ctx.copy_text(url);
-                self.transfer_msg = Some("✓ URL copied to clipboard".to_owned());
+                self.transfer_status = TransferStatus::Success("URL copied to clipboard".to_owned());
             }
-            if let Some(path) = resp.presign {
-                self.start_presign(path, ctx);
-            }
-            if !resp.download.is_empty() && !busy {
-                self.start_download(resp.download, ctx);
-            }
-            if !resp.download_zip.is_empty() && !busy {
-                self.request_zip_download(resp.download_zip, ctx);
-            }
-            if !resp.delete.is_empty() && !busy {
-                self.start_delete(resp.delete, ctx);
-            }
-            if resp.upload && !busy {
-                self.start_upload(ctx);
-            }
-            if resp.upload_folder && !busy {
-                self.start_upload_folder(ctx);
-            }
+            if let Some(path) = resp.presign { self.start_presign(path, ctx); }
+            if !resp.download.is_empty() && !busy { self.start_download(resp.download, ctx); }
+            if !resp.download_zip.is_empty() && !busy { self.request_zip_download(resp.download_zip, ctx); }
+            if !resp.delete.is_empty() && !busy { self.start_delete(resp.delete, ctx); }
+            if resp.upload && !busy { self.start_upload(ctx); }
+            if resp.upload_folder && !busy { self.start_upload_folder(ctx); }
+            if resp.new_folder && !busy { self.new_folder_name = Some(String::new()); }
+            if let Some(path) = resp.rename { self.rename_state = Some(RenameState { path, new_name: String::new() }); }
         });
     }
 }

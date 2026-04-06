@@ -74,8 +74,8 @@ async fn do_upload_folder(
 
     let total = file_list.len();
     let mut errors = 0usize;
-    for (local_path, rel_key) in &file_list {
-        *progress.lock().unwrap() = rel_key.clone();
+    for (idx, (local_path, rel_key)) in file_list.iter().enumerate() {
+        *progress.lock().unwrap() = format!("{}/{} {}", idx + 1, total, rel_key);
         let dest = current_path.child_file(rel_key);
         match tokio::fs::read(local_path).await {
             Ok(data) => {
