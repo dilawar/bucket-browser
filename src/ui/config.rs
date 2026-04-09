@@ -119,8 +119,8 @@ impl ConfigFields {
                         .unwrap_or_else(|_| v.to_owned());
                     match k.to_ascii_lowercase().as_str() {
                         "endpoint" => self.endpoint = decoded,
-                        "region"   => self.region   = decoded,
-                        _          => {}
+                        "region" => self.region = decoded,
+                        _ => {}
                     }
                 }
             }
@@ -134,7 +134,7 @@ impl ConfigFields {
             };
 
             let mut parts = rest.splitn(2, '/');
-            let host   = parts.next().unwrap_or("");
+            let host = parts.next().unwrap_or("");
             let bucket = parts.next().unwrap_or("").trim_end_matches('/');
 
             self.endpoint = format!("{scheme}://{host}");
@@ -192,7 +192,7 @@ pub fn show(ui: &mut Ui, f: &mut ConfigFields, error: Option<&str>) -> ConfigRes
         );
         ui.add_space(12.0);
 
-        let mut uri_changed    = false;
+        let mut uri_changed = false;
         let mut uri_lost_focus = false;
         let mut fields_changed = false;
 
@@ -204,36 +204,55 @@ pub fn show(ui: &mut Ui, f: &mut ConfigFields, error: Option<&str>) -> ConfigRes
                 ui.label("Connection URI");
                 let r = ui.add(
                     TextEdit::singleline(&mut f.connection_uri)
-                        .hint_text("s3://bucket/  ·  s3://bucket/?endpoint=https%3A%2F%2F…&region=…  ·  https://endpoint/bucket")
+                        .hint_text("s3://bucket/?endpoint=https%3A%2F%2F…&region=…")
                         .desired_width(420.0)
                         .font(egui::TextStyle::Monospace),
                 );
-                if r.changed()    { uri_changed    = true; }
-                if r.lost_focus() { uri_lost_focus = true; }
+                if r.changed() {
+                    uri_changed = true;
+                }
+                if r.lost_focus() {
+                    uri_lost_focus = true;
+                }
                 ui.end_row();
 
                 ui.label("Bucket *");
-                if ui.add(
-                    TextEdit::singleline(&mut f.bucket)
-                        .hint_text("my-bucket")
-                        .desired_width(280.0),
-                ).changed() { fields_changed = true; }
+                if ui
+                    .add(
+                        TextEdit::singleline(&mut f.bucket)
+                            .hint_text("my-bucket")
+                            .desired_width(280.0),
+                    )
+                    .changed()
+                {
+                    fields_changed = true;
+                }
                 ui.end_row();
 
                 ui.label("Endpoint");
-                if ui.add(
-                    TextEdit::singleline(&mut f.endpoint)
-                        .hint_text("https://… (leave blank for AWS S3)")
-                        .desired_width(280.0),
-                ).changed() { fields_changed = true; }
+                if ui
+                    .add(
+                        TextEdit::singleline(&mut f.endpoint)
+                            .hint_text("https://… (leave blank for AWS S3)")
+                            .desired_width(280.0),
+                    )
+                    .changed()
+                {
+                    fields_changed = true;
+                }
                 ui.end_row();
 
                 ui.label("Region");
-                if ui.add(
-                    TextEdit::singleline(&mut f.region)
-                        .hint_text("us-east-1")
-                        .desired_width(280.0),
-                ).changed() { fields_changed = true; }
+                if ui
+                    .add(
+                        TextEdit::singleline(&mut f.region)
+                            .hint_text("us-east-1")
+                            .desired_width(280.0),
+                    )
+                    .changed()
+                {
+                    fields_changed = true;
+                }
                 ui.end_row();
             });
 
@@ -292,9 +311,7 @@ pub fn show(ui: &mut Ui, f: &mut ConfigFields, error: Option<&str>) -> ConfigRes
             ui.add_space(4.0);
         }
 
-        let ready = !f.bucket.is_empty()
-            && !f.access_key.is_empty()
-            && !f.secret_key.is_empty();
+        let ready = !f.bucket.is_empty() && !f.access_key.is_empty() && !f.secret_key.is_empty();
 
         ui.with_layout(Layout::top_down(Align::Center), |ui| {
             let btn = egui::Button::new(
