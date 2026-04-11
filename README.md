@@ -8,7 +8,7 @@
 A lightweight native GUI for browsing and managing **S3-compatible buckets** —
 AWS S3, Backblaze B2, MinIO, and any provider that speaks the S3 API.
 
-![Screenshot]("./images/Screenshot From 2026-04-11 12-12-41.png")
+![Screenshot](images/20260411.png)
 
 Built with Rust and [egui](https://github.com/emilk/egui).
 
