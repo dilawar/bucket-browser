@@ -7,6 +7,8 @@
 
 A lightweight native GUI for browsing and managing **S3-compatible buckets** — AWS S3, Backblaze B2, MinIO, and any provider that speaks the S3 API.
 
+![](./images/Screenshot From 2026-04-11 12-12-41.png)
+
 Built with Rust and [egui](https://github.com/emilk/egui).
 
 ---
@@ -26,12 +28,12 @@ Built with Rust and [egui](https://github.com/emilk/egui).
 
 Download the latest binary for your platform from the [Releases](https://github.com/dilawar/bucket-browser/releases/latest) page.
 
-| Platform | File |
-|---|---|
-| Linux x86_64 | `s3-explorer-linux-x86_64.tar.gz` |
-| Windows x86_64 | `s3-explorer-windows-x86_64.zip` |
-| macOS x86_64 | `s3-explorer-macos-x86_64.tar.gz` |
-| macOS ARM64 | `s3-explorer-macos-aarch64.tar.gz` |
+| Platform       | File                               |
+| -------------- | ---------------------------------- |
+| Linux x86_64   | `s3-explorer-linux-x86_64.tar.gz`  |
+| Windows x86_64 | `s3-explorer-windows-x86_64.zip`   |
+| macOS x86_64   | `s3-explorer-macos-x86_64.tar.gz`  |
+| macOS ARM64    | `s3-explorer-macos-aarch64.tar.gz` |
 
 ## Build from source
 
