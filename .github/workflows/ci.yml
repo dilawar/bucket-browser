@@ -67,7 +67,6 @@ jobs:
     name: Package Build — Linux x86_64
     runs-on: ubuntu-22.04
     needs: check
-    if: runner.os == 'Linux'
 
     steps:
       - uses: actions/checkout@v4
