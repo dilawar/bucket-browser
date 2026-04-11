@@ -428,6 +428,14 @@ mod wasm_helpers {
     }
 }
 
+/// On WASM, a network-level send failure is almost always a CORS block.
+/// The browser hides the real cause and just reports "Failed to fetch" or similar.
+/// Tag the error with a recognisable prefix so the UI can show targeted help.
+#[cfg(target_arch = "wasm32")]
+fn cors_hint(e: reqwest::Error) -> anyhow::Error {
+    anyhow::anyhow!("CORS_ERROR: {e}")
+}
+
 #[cfg(target_arch = "wasm32")]
 impl S3Backend {
     /// Build the host string for Authorization header.
@@ -538,7 +546,7 @@ impl S3Backend {
         for (k, v) in &headers {
             req = req.header(k.as_str(), v.as_str());
         }
-        let resp = req.send().await.context("HTTP GET failed")?;
+        let resp = req.send().await.map_err(cors_hint)?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -556,7 +564,7 @@ impl S3Backend {
         for (k, v) in &headers {
             req = req.header(k.as_str(), v.as_str());
         }
-        let resp = req.send().await.context("HTTP PUT failed")?;
+        let resp = req.send().await.map_err(cors_hint)?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -574,7 +582,7 @@ impl S3Backend {
         for (k, v) in &headers {
             req = req.header(k.as_str(), v.as_str());
         }
-        let resp = req.send().await.context("HTTP DELETE failed")?;
+        let resp = req.send().await.map_err(cors_hint)?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
