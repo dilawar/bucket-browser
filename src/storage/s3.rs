@@ -429,6 +429,17 @@ mod wasm_helpers {
     }
 }
 
+/// Sort query-string parameters alphabetically by name, as required by AWS Sig V4.
+#[cfg(target_arch = "wasm32")]
+fn sort_query(query: &str) -> String {
+    if query.is_empty() {
+        return String::new();
+    }
+    let mut pairs: Vec<&str> = query.split('&').collect();
+    pairs.sort_unstable();
+    pairs.join("&")
+}
+
 /// On WASM, a network-level send failure is almost always a CORS block.
 /// The browser hides the real cause and just reports "Failed to fetch" or similar.
 /// Tag the error with a recognisable prefix so the UI can show targeted help.
@@ -536,8 +547,10 @@ impl S3Backend {
     async fn do_get(&self, url: &str, req_path: &str, query: &str) -> Result<reqwest::Response> {
         const EMPTY_SHA: &str =
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        // AWS Sig V4 requires query parameters sorted by name.
+        let query = sort_query(query);
         let now = chrono::Utc::now();
-        let headers = self.sign_v4("GET", req_path, query, EMPTY_SHA, &now);
+        let headers = self.sign_v4("GET", req_path, &query, EMPTY_SHA, &now);
         let full_url = if query.is_empty() {
             url.to_owned()
         } else {
