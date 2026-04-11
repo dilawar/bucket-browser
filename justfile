@@ -14,13 +14,6 @@ build:
 build-release:
     cargo build --release
 
-# Run with an optional start directory (e.g. `just run /mnt/s3`)
-run dir="/":
-    cargo run -- {{ dir }}
-
-# Run (release)
-run-release dir="/":
-    cargo run --release -- {{ dir }}
 
 # Watch source files and recompile on change (requires cargo-watch)
 watch:
@@ -54,21 +47,6 @@ test:
 
 # Full CI gate: fmt + lint + test
 ci: fmt-check lint test
-
-# ── Maintenance ───────────────────────────────────────────────────────────────
-
-# Update dependencies
-update:
-    cargo update
-
-# Check for outdated dependencies (requires cargo-outdated)
-outdated:
-    cargo outdated
-
-# Remove build artefacts
-clean:
-    cargo clean
-    rm -rf pkg/
 
 # ── Packaging ─────────────────────────────────────────────────────────────────
 
