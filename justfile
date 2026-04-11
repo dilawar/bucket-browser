@@ -44,6 +44,7 @@ fmt-check:
 
 # Run all tests
 test:
+    @just decrypt
     cargo test
 
 # Full CI gate: fmt + lint + test
