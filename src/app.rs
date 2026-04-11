@@ -467,12 +467,11 @@ impl S3Explorer {
         });
 
         if remove_creds || keep_creds {
-            if remove_creds {
-                if let Err(e) = crate::credentials::CredentialStore::open()
+            if remove_creds
+                && let Err(e) = crate::credentials::CredentialStore::open()
                     .and_then(|s| s.delete())
-                {
-                    tracing::warn!("Failed to delete stored credentials: {e}");
-                }
+            {
+                tracing::warn!("Failed to delete stored credentials: {e}");
             }
             self.confirming_close = false;
             self.backend = None;
