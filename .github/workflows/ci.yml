@@ -113,7 +113,7 @@ jobs:
           CARGO_DEB_OUTPUT: target/debian/s3-explorer.deb
 
       - name: Build RPM package
-        run: cargo generate-rpm
+        run: cargo generate-rpm --profile release
         working-directory: .
 
       - name: Verify Debian package

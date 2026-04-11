@@ -114,7 +114,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: x86_64-unknown-linux-gnu-packages
+          key: linux-packages
 
       - name: Install Linux dependencies
         run: |
@@ -140,13 +140,13 @@ jobs:
           cargo install cargo-generate-rpm
 
       - name: Build release binary
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+        run: cargo build --release
 
       - name: Build Debian package
-        run: cargo deb --target x86_64-unknown-linux-gnu
+        run: cargo deb
 
       - name: Build RPM package
-        run: cargo generate-rpm
+        run: cargo generate-rpm --profile release
 
       - name: Upload Debian package
         uses: actions/upload-artifact@v4
