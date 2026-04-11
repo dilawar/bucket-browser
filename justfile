@@ -1,4 +1,5 @@
 set dotenv-load := true
+set shell := ["bash", "-c"]
 
 # Default: list available recipes
 default:
@@ -47,6 +48,18 @@ test:
 
 # Full CI gate: fmt + lint + test
 ci: fmt-check lint test
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+
+# Encrypt .env → .env.gpg using GPG_PASSPHRASE
+encrypt:
+    gpg --batch --yes --passphrase-fd 0 --symmetric --cipher-algo AES256 \
+        --output .env.gpg .env <<< "$GPG_PASSPHRASE_GITHUB"
+
+# Decrypt .env.gpg → .env using GPG_PASSPHRASE
+decrypt:
+    gpg --batch --yes --passphrase-fd 0 --decrypt \
+        --output .env .env.gpg <<< "$GPG_PASSPHRASE_GITHUB"
 
 # ── Packaging ─────────────────────────────────────────────────────────────────
 
